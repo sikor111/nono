@@ -1529,6 +1529,12 @@ pub struct SetupArgs {
     #[arg(long, help_heading = "OPTIONS")]
     pub shell_integration: bool,
 
+    /// Print the filesystem paths nono uses (config, profiles, sessions,
+    /// trusted keys, executable) and exit. Useful for debugging "where
+    /// does nono look for X?" without strace or reading the source.
+    #[arg(long, help_heading = "OPTIONS")]
+    pub print_paths: bool,
+
     /// Show detailed information during setup
     #[arg(short, long, action = clap::ArgAction::Count, help_heading = "OPTIONS")]
     pub verbose: u8,

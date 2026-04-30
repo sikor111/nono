@@ -2,7 +2,7 @@ use crate::cli::SetupArgs;
 use crate::profile;
 use nono::{NonoError, Result};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[cfg(target_os = "macos")]
 use nix::libc;
@@ -11,6 +11,7 @@ pub struct SetupRunner {
     check_only: bool,
     generate_profiles: bool,
     show_shell_integration: bool,
+    print_paths: bool,
     #[allow(dead_code)]
     verbose: u8,
 }
@@ -21,11 +22,20 @@ impl SetupRunner {
             check_only: args.check_only,
             generate_profiles: args.profiles,
             show_shell_integration: args.shell_integration,
+            print_paths: args.print_paths,
             verbose: args.verbose,
         }
     }
 
     pub fn run(&self) -> Result<()> {
+        if self.print_paths {
+            // Diagnostic-only mode — skip installation/sandbox checks
+            // and the protection summary so the output is just the
+            // requested paths, suitable for piping into shell tools.
+            print!("{}", format_nono_paths_list(&collect_nono_paths()));
+            return Ok(());
+        }
+
         // Installation verification
         self.check_installation()?;
 
@@ -503,6 +513,83 @@ const DATA_PROCESSING_PROFILE: &str = r#"{
 }
 "#;
 
+/// Build the list of well-known filesystem paths nono uses, with a
+/// stable label for each. Failed lookups (e.g. unknown HOME) become
+/// `Err` entries rather than panicking — `nono setup --print-paths`
+/// should still surface every label even when one of them can't be
+/// resolved on the current host.
+fn collect_nono_paths() -> Vec<(&'static str, std::result::Result<PathBuf, String>)> {
+    fn map_err<T>(r: Result<T>) -> std::result::Result<T, String> {
+        r.map_err(|e| e.to_string())
+    }
+    fn from_option<T>(opt: Option<T>, msg: &str) -> std::result::Result<T, String> {
+        opt.ok_or_else(|| msg.to_string())
+    }
+
+    vec![
+        (
+            "executable",
+            std::env::current_exe().map_err(|e| format!("current_exe failed: {e}")),
+        ),
+        (
+            "user_config_dir",
+            from_option(
+                crate::config::user_config_dir(),
+                "could not resolve user config directory",
+            ),
+        ),
+        (
+            "user_config_file",
+            map_err(crate::config::user::user_config_path()),
+        ),
+        (
+            "user_profiles_dir",
+            map_err(crate::config::user::user_profiles_dir()),
+        ),
+        (
+            "user_trusted_keys_dir",
+            map_err(crate::config::user::user_trusted_keys_dir()),
+        ),
+        ("sessions_dir", map_err(crate::session::sessions_dir())),
+    ]
+}
+
+/// Render a `[(label, path-or-error)]` list as left-aligned text
+/// (label column padded to widest label) with a trailing newline.
+/// Lines with resolution failures show `<label>: (unavailable: <reason>)`
+/// so consumers can `grep '(unavailable'` to spot setup gaps.
+fn format_nono_paths_list(
+    entries: &[(&'static str, std::result::Result<PathBuf, String>)],
+) -> String {
+    let label_width = entries
+        .iter()
+        .map(|(label, _)| label.len())
+        .max()
+        .unwrap_or(0);
+    let mut out = String::new();
+    for (label, result) in entries {
+        match result {
+            Ok(path) => {
+                out.push_str(&format!(
+                    "{:<width$}  {}\n",
+                    label,
+                    path.display(),
+                    width = label_width
+                ));
+            }
+            Err(reason) => {
+                out.push_str(&format!(
+                    "{:<width$}  (unavailable: {})\n",
+                    label,
+                    reason,
+                    width = label_width
+                ));
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -539,6 +626,7 @@ mod tests {
             check_only: false,
             generate_profiles: true,
             show_shell_integration: false,
+            print_paths: false,
             verbose: 0,
         };
         runner.setup_profiles().expect("setup_profiles failed");
@@ -565,5 +653,60 @@ mod tests {
             .feature_names()
             .iter()
             .any(|n| n.starts_with("TCP network filtering")));
+    }
+
+    #[test]
+    fn format_paths_list_pads_to_widest_label() {
+        let entries = vec![
+            ("a", Ok(PathBuf::from("/short"))),
+            ("longer_label", Ok(PathBuf::from("/longer/path"))),
+        ];
+        let rendered = format_nono_paths_list(&entries);
+        let lines: Vec<&str> = rendered.lines().collect();
+        assert_eq!(lines.len(), 2);
+        // The short label must be padded so its path column aligns with
+        // the longer label's path column.
+        let path_col_a = lines[0].find('/').expect("first line has path");
+        let path_col_b = lines[1].find('/').expect("second line has path");
+        assert_eq!(
+            path_col_a, path_col_b,
+            "path column must align across rows: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn format_paths_list_marks_unavailable_entries() {
+        let entries = vec![
+            ("ok", Ok(PathBuf::from("/x"))),
+            ("missing", Err("not found".to_string())),
+        ];
+        let rendered = format_nono_paths_list(&entries);
+        assert!(rendered.contains("ok       /x"));
+        assert!(
+            rendered.contains("(unavailable: not found)"),
+            "error entry must be greppable: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn collect_nono_paths_emits_every_known_label() {
+        // Even on a host where some paths fail to resolve, the helper
+        // must surface every label so consumers don't have to special-case
+        // missing fields in their parsing.
+        let entries = collect_nono_paths();
+        let labels: Vec<&str> = entries.iter().map(|(l, _)| *l).collect();
+        for required in [
+            "executable",
+            "user_config_dir",
+            "user_config_file",
+            "user_profiles_dir",
+            "user_trusted_keys_dir",
+            "sessions_dir",
+        ] {
+            assert!(
+                labels.contains(&required),
+                "missing label `{required}` in path list: {labels:?}"
+            );
+        }
     }
 }
