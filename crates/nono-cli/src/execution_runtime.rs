@@ -169,6 +169,27 @@ pub(crate) fn execute_sandboxed(plan: LaunchPlan) -> Result<()> {
     let proxy = &flags.proxy;
     let session = &flags.session;
 
+    // Structured run summary so consumers running with `RUST_LOG=info`
+    // (the default tracing-subscriber renders fields as `key=value`)
+    // can grep / aggregate / correlate runs across many sandboxed
+    // invocations without parsing colored stderr.
+    let program_basename = Path::new(&program)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("(unknown)");
+    info!(
+        program = program_basename,
+        profile = flags.session.profile_name.as_deref().unwrap_or("(none)"),
+        fs_caps = caps.fs_capabilities().len(),
+        unix_socket_caps = caps.unix_socket_capabilities().len(),
+        network_mode = ?caps.network_mode(),
+        blocked_commands = caps.blocked_commands().len(),
+        secrets = loaded_secrets.len(),
+        rollback = rollback.requested,
+        proxy = proxy.active,
+        "preparing nono run"
+    );
+
     if let Some(blocked) =
         config::check_blocked_command(&program, caps.allowed_commands(), caps.blocked_commands())?
     {
@@ -259,8 +280,9 @@ pub(crate) fn execute_sandboxed(plan: LaunchPlan) -> Result<()> {
     );
 
     info!(
-        "Executing with strategy: {:?}, threading: {:?}",
-        strategy, threading
+        strategy = ?strategy,
+        threading = ?threading,
+        "executing sandbox"
     );
 
     #[cfg(target_os = "linux")]
