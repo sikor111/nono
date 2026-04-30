@@ -192,6 +192,52 @@ pub fn query_path(
     })
 }
 
+/// Query whether running a command is permitted by the resolved policy.
+///
+/// Mirrors the lookup performed at exec time: the explicit allow-list takes
+/// precedence over the blocklist (so `--allow-command rm` unblocks `rm`).
+/// The query operates on the basename of `name`, matching the runtime check
+/// — `nono why --command /bin/rm` and `nono why --command rm` resolve the
+/// same way.
+pub fn query_command(name: &str, caps: &CapabilitySet) -> Result<QueryResult> {
+    let allowed: Vec<String> = caps.allowed_commands().to_vec();
+    let blocked: Vec<String> = caps.blocked_commands().to_vec();
+
+    if let Some(matched) = config::check_blocked_command(name, &allowed, &blocked)? {
+        return Ok(QueryResult::Denied {
+            reason: "blocked_command".to_string(),
+            details: Some(format!(
+                "Command '{matched}' is blocked by the resolved policy. \
+                 Override with `--allow-command {matched}` if you understand the risk."
+            )),
+            policy_source: Some("policy:blocked_commands".to_string()),
+            matching_capability: None,
+            suggested_flag: Some(format!("--allow-command {matched}")),
+        });
+    }
+
+    let basename = std::path::Path::new(name)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| name.to_string());
+
+    let explicitly_allowed = allowed.iter().any(|a| a == &basename);
+    Ok(QueryResult::Allowed {
+        reason: if explicitly_allowed {
+            "command_explicitly_allowed".to_string()
+        } else {
+            "command_not_blocked".to_string()
+        },
+        granted_path: None,
+        access: None,
+        source: if explicitly_allowed {
+            Some("policy:allowed_commands".to_string())
+        } else {
+            None
+        },
+    })
+}
+
 /// Query whether network access is permitted
 pub fn query_network(host: &str, port: u16, caps: &CapabilitySet) -> QueryResult {
     if caps.is_network_blocked() {
@@ -494,5 +540,71 @@ mod tests {
         let caps = CapabilitySet::new().block_network();
         let result = query_network("example.com", 443, &caps);
         assert!(matches!(result, QueryResult::Denied { .. }));
+    }
+
+    #[test]
+    fn test_query_command_blocked_returns_denied_with_suggested_flag() {
+        let caps = CapabilitySet::new().block_command("rm");
+        let result = query_command("rm", &caps).expect("query_command failed");
+        match result {
+            QueryResult::Denied {
+                reason,
+                suggested_flag,
+                policy_source,
+                ..
+            } => {
+                assert_eq!(reason, "blocked_command");
+                assert_eq!(
+                    suggested_flag.as_deref(),
+                    Some("--allow-command rm"),
+                    "should hint at the override flag",
+                );
+                assert_eq!(policy_source.as_deref(), Some("policy:blocked_commands"));
+            }
+            other => panic!("expected denied, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_query_command_strips_path_prefix_to_basename() {
+        // Mirror runtime behavior: /bin/rm should resolve like rm.
+        let caps = CapabilitySet::new().block_command("rm");
+        let result = query_command("/bin/rm", &caps).expect("query_command failed");
+        assert!(
+            matches!(result, QueryResult::Denied { .. }),
+            "absolute path to rm must still resolve as blocked"
+        );
+    }
+
+    #[test]
+    fn test_query_command_allow_overrides_block() {
+        // Explicit allow-list wins over the blocklist for the same name.
+        let caps = CapabilitySet::new().block_command("rm").allow_command("rm");
+        let result = query_command("rm", &caps).expect("query_command failed");
+        match result {
+            QueryResult::Allowed { reason, source, .. } => {
+                assert_eq!(reason, "command_explicitly_allowed");
+                assert_eq!(source.as_deref(), Some("policy:allowed_commands"));
+            }
+            other => panic!("expected allowed, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_query_command_unrelated_name_is_allowed() {
+        // Commands that aren't on either list are allowed by default and
+        // should NOT be tagged as `command_explicitly_allowed`.
+        let caps = CapabilitySet::new().block_command("rm");
+        let result = query_command("echo", &caps).expect("query_command failed");
+        match result {
+            QueryResult::Allowed { reason, source, .. } => {
+                assert_eq!(reason, "command_not_blocked");
+                assert!(
+                    source.is_none(),
+                    "no source attribution when command isn't on any list"
+                );
+            }
+            other => panic!("expected allowed, got {:?}", other),
+        }
     }
 }

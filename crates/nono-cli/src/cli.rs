@@ -1550,6 +1550,12 @@ pub struct WhyArgs {
     #[arg(long, default_value = "443", help_heading = "QUERY")]
     pub port: u16,
 
+    /// Command name to check against the resolved policy's blocklist /
+    /// allowlist (e.g. `nono why --command rm --profile claude`).
+    #[arg(long = "command", value_name = "NAME", help_heading = "QUERY",
+          conflicts_with_all = &["path", "host"])]
+    pub command_name: Option<String>,
+
     /// Output JSON instead of human-readable format
     #[arg(long, help_heading = "OPTIONS")]
     pub json: bool,

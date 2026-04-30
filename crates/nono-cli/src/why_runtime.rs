@@ -96,9 +96,11 @@ pub(crate) fn run_why(args: WhyArgs) -> Result<()> {
         query_path(path, op, &caps, &overridden_paths)?
     } else if let Some(ref host) = args.host {
         query_network(host, args.port, &caps)
+    } else if let Some(ref command) = args.command_name {
+        query_ext::query_command(command, &caps)?
     } else {
         return Err(NonoError::ConfigParse(
-            "--path or --host is required".to_string(),
+            "--path, --host or --command is required".to_string(),
         ));
     };
 
