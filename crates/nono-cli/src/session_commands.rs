@@ -317,12 +317,46 @@ pub fn run_logs(args: &LogsArgs) -> Result<()> {
     }
 }
 
-/// Dispatch `nono inspect` — placeholder for Step 4.
+/// Dispatch `nono inspect`.
 pub fn run_inspect(args: &InspectArgs) -> Result<()> {
     let record = session::load_session(&args.session)?;
 
+    // When --events is set, eagerly read the event log so both human and
+    // JSON modes can use the same data. A missing log is not an error
+    // (the session may have exited before any events were written) — we
+    // surface an empty list instead of failing.
+    let event_lines: Option<Vec<String>> = if args.events {
+        let events_path = session::session_events_path(&record.session_id)?;
+        if events_path.exists() {
+            Some(read_event_log_lines(&events_path, args.logs_tail)?)
+        } else {
+            Some(Vec::new())
+        }
+    } else {
+        None
+    };
+
     if args.json {
-        let json = serde_json::to_string_pretty(&record)
+        let value = match &event_lines {
+            None => serde_json::to_value(&record)
+                .map_err(|e| NonoError::ConfigParse(format!("JSON serialization failed: {e}")))?,
+            Some(lines) => {
+                // Each ndjson line is itself a JSON document; preserve that
+                // structure so consumers don't have to re-parse strings.
+                let events: Vec<serde_json::Value> = lines
+                    .iter()
+                    .map(|line| {
+                        serde_json::from_str::<serde_json::Value>(line)
+                            .unwrap_or_else(|_| serde_json::Value::String(line.clone()))
+                    })
+                    .collect();
+                serde_json::json!({
+                    "session": record,
+                    "events": events,
+                })
+            }
+        };
+        let json = serde_json::to_string_pretty(&value)
             .map_err(|e| NonoError::ConfigParse(format!("JSON serialization failed: {e}")))?;
         println!("{json}");
         return Ok(());
@@ -350,6 +384,21 @@ pub fn run_inspect(args: &InspectArgs) -> Result<()> {
     println!("Network:    {}", record.network);
     if let Some(ref rollback) = record.rollback_session {
         println!("Rollback:   {}", rollback);
+    }
+
+    if let Some(lines) = event_lines {
+        let header = match args.logs_tail {
+            Some(n) => format!("\nEVENTS (last {n}):"),
+            None => "\nEVENTS:".to_string(),
+        };
+        println!("{header}");
+        if lines.is_empty() {
+            println!("  (no events recorded)");
+        } else {
+            for line in &lines {
+                println!("{line}");
+            }
+        }
     }
 
     Ok(())

@@ -2013,9 +2013,17 @@ pub struct InspectArgs {
     #[arg(long)]
     pub json: bool,
 
-    /// Include event log
+    /// Include the event log alongside the session metadata.
+    /// In human-readable mode an `EVENTS` section is appended;
+    /// in `--json` mode the document becomes
+    /// `{"session": <record>, "events": [...]}` instead of the bare record.
     #[arg(long)]
     pub events: bool,
+
+    /// When `--events` is set, only show the last N event log entries
+    /// (default: all entries). Has no effect without `--events`.
+    #[arg(long, value_name = "N", requires = "events")]
+    pub logs_tail: Option<usize>,
 
     /// Include file changes
     #[arg(long)]
@@ -2372,6 +2380,46 @@ mod tests {
         assert!(!help.contains("--upstream-bypass"));
         assert!(!help.contains("--proxy-port"));
         assert!(!help.contains("--allow-net"));
+    }
+
+    #[test]
+    fn inspect_logs_tail_requires_events_flag() {
+        // `--logs-tail N` is meaningful only alongside `--events`. Without
+        // it, clap should reject the invocation so users discover the
+        // dependency at parse time, not silently ignore the limit.
+        let bare = Cli::try_parse_from(["nono", "inspect", "abc123", "--logs-tail", "10"]);
+        assert!(
+            bare.is_err(),
+            "--logs-tail without --events should fail at parse time"
+        );
+
+        let with_events =
+            Cli::try_parse_from(["nono", "inspect", "abc123", "--events", "--logs-tail", "10"]);
+        assert!(
+            with_events.is_ok(),
+            "--logs-tail with --events should be accepted: {:?}",
+            with_events.err()
+        );
+        if let Ok(cli) = with_events {
+            if let Commands::Inspect(args) = cli.command {
+                assert!(args.events);
+                assert_eq!(args.logs_tail, Some(10));
+            } else {
+                panic!("expected Inspect command");
+            }
+        }
+    }
+
+    #[test]
+    fn inspect_events_alone_implies_no_tail_limit() {
+        let cli =
+            Cli::try_parse_from(["nono", "inspect", "abc123", "--events"]).expect("should parse");
+        if let Commands::Inspect(args) = cli.command {
+            assert!(args.events);
+            assert_eq!(args.logs_tail, None);
+        } else {
+            panic!("expected Inspect command");
+        }
     }
 
     #[test]
