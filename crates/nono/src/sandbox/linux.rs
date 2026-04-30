@@ -1348,9 +1348,13 @@ pub fn read_open_how(pid: u32, addr: u64) -> Result<OpenHow> {
         NonoError::SandboxInit(format!("Failed to read open_how from {}: {}", mem_path, e))
     })?;
 
-    // SAFETY: OpenHow is repr(C) with no padding between fields (u64, u64, u64).
-    // We read exactly size_of::<OpenHow>() bytes into a properly aligned buffer.
-    // The struct contains only u64 values which have no invalid bit patterns.
+    // SAFETY: `read_unaligned` requires (1) the source pointer is valid for
+    // `size_of::<T>()` bytes and (2) the bit pattern is a valid value of T.
+    // (1) holds: `buf` is exactly `size_of::<OpenHow>()` bytes, fully initialized
+    // by `read_exact` above. (2) holds: OpenHow is `#[repr(C)]` containing only
+    // `u64` fields (flags, mode, resolve), and every bit pattern is a valid u64.
+    // Alignment is *not* required — that is precisely why we use `read_unaligned`
+    // here, since `[u8; N]` has alignment 1 while `OpenHow` requires alignment 8.
     let open_how: OpenHow = unsafe { std::ptr::read_unaligned(buf.as_ptr().cast()) };
 
     Ok(open_how)
