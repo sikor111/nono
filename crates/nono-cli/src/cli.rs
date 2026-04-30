@@ -2024,6 +2024,13 @@ pub struct PsArgs {
     #[arg(long, value_enum, value_name = "STATUS")]
     pub status: Option<PsStatusFilter>,
 
+    /// Filter by exit code. Implicitly restricts to exited sessions
+    /// (`--all` is forced on for the lookup since running sessions have
+    /// no exit code yet). Useful for triaging — e.g. `--exit-code 0`
+    /// finds successful runs, `--exit-code 137` finds OOM kills.
+    #[arg(long, value_name = "CODE")]
+    pub exit_code: Option<i32>,
+
     /// Sort the table by started time, name, status, or profile.
     /// Default sort is `started` (newest first), matching prior behavior.
     #[arg(long, value_enum, value_name = "KEY")]

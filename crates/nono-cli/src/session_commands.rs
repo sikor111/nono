@@ -135,14 +135,27 @@ pub fn run_ps(args: &PsArgs) -> Result<()> {
 ///
 /// On top of that, `--name` and `--profile` apply if set.
 fn ps_matches(s: &SessionRecord, args: &PsArgs) -> bool {
-    let status_ok = match args.status {
-        Some(PsStatusFilter::Running) => s.status == SessionStatus::Running,
-        Some(PsStatusFilter::Paused) => s.status == SessionStatus::Paused,
-        Some(PsStatusFilter::Exited) => s.status == SessionStatus::Exited,
-        None => args.all || s.status != SessionStatus::Exited,
-    };
-    if !status_ok {
-        return false;
+    // `--exit-code` only makes sense for exited sessions; if the user
+    // asked for a specific code, force-narrow to Exited regardless of
+    // --all / --status defaults so `nono ps --exit-code 0` doesn't have
+    // to be paired with `--all` to be useful.
+    if let Some(target) = args.exit_code {
+        if s.status != SessionStatus::Exited {
+            return false;
+        }
+        if s.exit_code != Some(target) {
+            return false;
+        }
+    } else {
+        let status_ok = match args.status {
+            Some(PsStatusFilter::Running) => s.status == SessionStatus::Running,
+            Some(PsStatusFilter::Paused) => s.status == SessionStatus::Paused,
+            Some(PsStatusFilter::Exited) => s.status == SessionStatus::Exited,
+            None => args.all || s.status != SessionStatus::Exited,
+        };
+        if !status_ok {
+            return false;
+        }
     }
 
     if let Some(pat) = args.name.as_deref() {
@@ -337,7 +350,11 @@ fn cmp_ps(a: &SessionRecord, b: &SessionRecord, key: PsSortBy) -> std::cmp::Orde
 /// Build the user-facing "no sessions" message that mirrors the active
 /// filter set, so the user understands *why* the table is empty.
 fn empty_filter_message(args: &PsArgs) -> &'static str {
-    if args.name.is_some() || args.profile.is_some() || args.status.is_some() {
+    if args.name.is_some()
+        || args.profile.is_some()
+        || args.status.is_some()
+        || args.exit_code.is_some()
+    {
         "No sessions match the requested filters."
     } else if args.all {
         "No sessions found."
@@ -858,6 +875,7 @@ mod tests {
             name: None,
             profile: None,
             status: None,
+            exit_code: None,
             sort: None,
             reverse: false,
             short: false,
@@ -937,6 +955,82 @@ mod tests {
             "exact match — substring of another profile must NOT pass"
         );
         assert!(!ps_matches(&no_profile, &args));
+    }
+
+    fn exited_with_code(id: &str, code: i32) -> SessionRecord {
+        SessionRecord {
+            exit_code: Some(code),
+            ..make_record(id, None, None, SessionStatus::Exited)
+        }
+    }
+
+    #[test]
+    fn ps_filter_exit_code_zero_finds_only_successful_exits() {
+        let success = exited_with_code("a", 0);
+        let failed = exited_with_code("b", 137);
+        let still_running = make_record("c", None, None, SessionStatus::Running);
+        let args = PsArgs {
+            exit_code: Some(0),
+            ..ps_args()
+        };
+        assert!(ps_matches(&success, &args));
+        assert!(!ps_matches(&failed, &args));
+        assert!(
+            !ps_matches(&still_running, &args),
+            "running sessions have no exit code yet — must be excluded"
+        );
+    }
+
+    #[test]
+    fn ps_filter_exit_code_specific_value() {
+        let oom = exited_with_code("a", 137);
+        let other = exited_with_code("b", 1);
+        let args = PsArgs {
+            exit_code: Some(137),
+            ..ps_args()
+        };
+        assert!(ps_matches(&oom, &args));
+        assert!(!ps_matches(&other, &args));
+    }
+
+    #[test]
+    fn ps_filter_exit_code_implicitly_includes_exited_without_all() {
+        // Default behavior hides exited sessions; --exit-code should
+        // override that so users don't need to also pass --all.
+        let success = exited_with_code("a", 0);
+        let args = PsArgs {
+            exit_code: Some(0),
+            all: false,
+            ..ps_args()
+        };
+        assert!(
+            ps_matches(&success, &args),
+            "--exit-code must auto-include exited sessions even without --all"
+        );
+    }
+
+    #[test]
+    fn ps_filter_exit_code_composes_with_other_filters() {
+        let target = SessionRecord {
+            exit_code: Some(0),
+            ..make_record(
+                "a",
+                Some("review-bot"),
+                Some("default"),
+                SessionStatus::Exited,
+            )
+        };
+        let wrong_name = SessionRecord {
+            exit_code: Some(0),
+            ..make_record("b", Some("other"), Some("default"), SessionStatus::Exited)
+        };
+        let args = PsArgs {
+            exit_code: Some(0),
+            name: Some("review".to_string()),
+            ..ps_args()
+        };
+        assert!(ps_matches(&target, &args));
+        assert!(!ps_matches(&wrong_name, &args));
     }
 
     #[test]
