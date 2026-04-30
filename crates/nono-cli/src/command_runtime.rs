@@ -81,11 +81,16 @@ pub(crate) fn run_sandbox(mut run_args: RunArgs, silent: bool) -> Result<()> {
         // exactly one JSON document and nothing else.
         let prepared = prepare_sandbox(&args, true)?;
         validate_external_proxy_bypass(&args, &prepared)?;
+        let extras = output::DryRunJsonExtras {
+            allowed_env_vars: prepared.allowed_env_vars.as_deref(),
+            override_deny_paths: &prepared.override_deny_paths,
+        };
         return output::print_capabilities_json(
             &prepared.caps,
             &program,
             &cmd_args,
             prepared.secrets.len(),
+            &extras,
         );
     }
 
@@ -118,11 +123,16 @@ pub(crate) fn run_shell(args: ShellArgs, silent: bool) -> Result<()> {
 
     if args.sandbox.dry_run_json {
         let prepared = prepare_sandbox(&args.sandbox, true)?;
+        let extras = output::DryRunJsonExtras {
+            allowed_env_vars: prepared.allowed_env_vars.as_deref(),
+            override_deny_paths: &prepared.override_deny_paths,
+        };
         return output::print_capabilities_json(
             &prepared.caps,
             shell_path.as_os_str(),
             &[],
             prepared.secrets.len(),
+            &extras,
         );
     }
 
@@ -204,11 +214,16 @@ pub(crate) fn run_wrap(wrap_args: WrapArgs, silent: bool) -> Result<()> {
 
     if args.dry_run_json {
         let prepared = prepare_sandbox(&args, true)?;
+        let extras = output::DryRunJsonExtras {
+            allowed_env_vars: prepared.allowed_env_vars.as_deref(),
+            override_deny_paths: &prepared.override_deny_paths,
+        };
         return output::print_capabilities_json(
             &prepared.caps,
             &program,
             &cmd_args,
             prepared.secrets.len(),
+            &extras,
         );
     }
 

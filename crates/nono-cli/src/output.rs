@@ -8,7 +8,7 @@ use colored::Colorize;
 use nono::{AccessMode, CapabilitySet, NetworkMode, NonoError, Result};
 use std::ffi::{OsStr, OsString};
 use std::io::{BufRead, IsTerminal, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 // ---------------------------------------------------------------------------
@@ -600,18 +600,50 @@ pub fn print_dry_run(program: &OsStr, cmd_args: &[OsString], silent: bool) {
     );
 }
 
+/// Extra fields piped from `PreparedSandbox` into the dry-run-json snapshot
+/// that aren't carried on `CapabilitySet` itself.
+///
+/// Grouped into a struct so future iterations can extend the JSON without
+/// churning the call signature at every call site.
+pub struct DryRunJsonExtras<'a> {
+    /// Allow-list of env-var names that the sandboxed process will inherit
+    /// from the parent shell. `None` means "no filter — everything inherits";
+    /// `Some([])` means "strip everything".
+    pub allowed_env_vars: Option<&'a [String]>,
+    /// Paths exempted from deny groups via the profile's `override_deny`
+    /// directive. These are policy-relevant for security audits because
+    /// they widen access beyond the default sensitive-path lockdown.
+    pub override_deny_paths: &'a [PathBuf],
+}
+
+#[cfg(test)]
+impl<'a> DryRunJsonExtras<'a> {
+    /// Empty extras (no env filter, no override-deny paths) — used in unit
+    /// tests where the caller wants the minimum schema shape. Production
+    /// callers always populate this from `PreparedSandbox`.
+    #[must_use]
+    pub fn empty() -> Self {
+        Self {
+            allowed_env_vars: None,
+            override_deny_paths: &[],
+        }
+    }
+}
+
 /// Build a structured JSON snapshot of the resolved capabilities and the
 /// command that would be executed.
 ///
 /// Used by `--dry-run-json` to give tooling a stable, machine-readable view
 /// of the sandbox without actually applying it. The `schema_version` field
 /// lets consumers detect breaking changes; bump it whenever fields are
-/// removed or their meaning changes.
+/// removed or their meaning changes. Additive growth (new keys with sensible
+/// defaults) does NOT bump it.
 pub fn capabilities_to_json(
     caps: &CapabilitySet,
     program: &OsStr,
     cmd_args: &[OsString],
     secrets_count: usize,
+    extras: &DryRunJsonExtras<'_>,
 ) -> serde_json::Value {
     use serde_json::json;
 
@@ -633,6 +665,21 @@ pub fn capabilities_to_json(
         }),
     };
 
+    // env_filter mirrors the tagged shape used by `network` so consumers
+    // can branch on `.mode` rather than checking for null. "inherit_all"
+    // means the sandbox doesn't filter the inherited environment;
+    // "restricted" lists exactly the names that are passed through.
+    let env_filter = match extras.allowed_env_vars {
+        None => json!({ "mode": "inherit_all" }),
+        Some(names) => json!({ "mode": "restricted", "names": names }),
+    };
+
+    let override_deny_paths: Vec<String> = extras
+        .override_deny_paths
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect();
+
     json!({
         "schema_version": 1,
         "command": command,
@@ -650,6 +697,8 @@ pub fn capabilities_to_json(
         "allowed_commands": caps.allowed_commands(),
         "blocked_commands": caps.blocked_commands(),
         "secrets_count": secrets_count,
+        "env_filter": env_filter,
+        "override_deny_paths": override_deny_paths,
     })
 }
 
@@ -663,8 +712,9 @@ pub fn print_capabilities_json(
     program: &OsStr,
     cmd_args: &[OsString],
     secrets_count: usize,
+    extras: &DryRunJsonExtras<'_>,
 ) -> Result<()> {
-    let value = capabilities_to_json(caps, program, cmd_args, secrets_count);
+    let value = capabilities_to_json(caps, program, cmd_args, secrets_count, extras);
     let serialized = serde_json::to_string(&value).map_err(|e| {
         NonoError::ConfigParse(format!("failed to serialize dry-run-json output: {e}"))
     })?;
@@ -906,10 +956,11 @@ mod tests {
     use super::{
         capabilities_to_json, finish_status_line_for_handoff, format_unix_socket_mode_badge,
         normalize_terminal_line_endings, print_applying_sandbox, print_capabilities,
-        print_profile_hint, render_diagnostic_footer, take_pending_status_line,
+        print_profile_hint, render_diagnostic_footer, take_pending_status_line, DryRunJsonExtras,
     };
     use nono::{AccessMode, CapabilitySet, UnixSocketMode};
     use std::ffi::{OsStr, OsString};
+    use std::path::PathBuf;
     use tempfile::tempdir;
 
     #[test]
@@ -987,7 +1038,13 @@ mod tests {
         let program: OsString = "/bin/echo".into();
         let cmd_args: Vec<OsString> = vec!["hello".into()];
 
-        let value = capabilities_to_json(&caps, OsStr::new(&program), &cmd_args, 0);
+        let value = capabilities_to_json(
+            &caps,
+            OsStr::new(&program),
+            &cmd_args,
+            0,
+            &DryRunJsonExtras::empty(),
+        );
         let obj = value.as_object().expect("json must be an object");
 
         for key in [
@@ -1007,6 +1064,8 @@ mod tests {
             "allowed_commands",
             "blocked_commands",
             "secrets_count",
+            "env_filter",
+            "override_deny_paths",
         ] {
             assert!(
                 obj.contains_key(key),
@@ -1031,6 +1090,16 @@ mod tests {
             serde_json::json!([]),
             "filesystem starts empty"
         );
+        assert_eq!(
+            obj["env_filter"],
+            serde_json::json!({ "mode": "inherit_all" }),
+            "no env filter ⇒ inherit_all"
+        );
+        assert_eq!(
+            obj["override_deny_paths"],
+            serde_json::json!([]),
+            "override_deny_paths is an empty array, not null"
+        );
     }
 
     #[test]
@@ -1042,7 +1111,13 @@ mod tests {
             .block_network();
 
         let program: OsString = "/bin/sh".into();
-        let value = capabilities_to_json(&caps, OsStr::new(&program), &[], 3);
+        let value = capabilities_to_json(
+            &caps,
+            OsStr::new(&program),
+            &[],
+            3,
+            &DryRunJsonExtras::empty(),
+        );
         let obj = value.as_object().expect("object");
 
         assert_eq!(obj["network"]["mode"], serde_json::json!("blocked"));
@@ -1056,6 +1131,38 @@ mod tests {
             entry["resolved"].as_str().map(std::path::Path::new),
             Some(dir.path().canonicalize().expect("canon").as_path()),
             "resolved path matches canonicalized grant",
+        );
+    }
+
+    #[test]
+    fn capabilities_to_json_emits_env_filter_and_override_deny() {
+        // Restricted env-var allowlist with override_deny entries: both are
+        // policy-relevant for security audits and must round-trip into JSON
+        // with their tagged shape preserved.
+        let caps = CapabilitySet::new();
+        let env_names: Vec<String> = vec!["PATH".to_string(), "HOME".to_string()];
+        let override_paths: Vec<PathBuf> =
+            vec![PathBuf::from("/tmp/exempted"), PathBuf::from("/var/audit")];
+        let extras = DryRunJsonExtras {
+            allowed_env_vars: Some(&env_names),
+            override_deny_paths: &override_paths,
+        };
+
+        let value = capabilities_to_json(&caps, OsStr::new("/bin/sh"), &[], 0, &extras);
+        let obj = value.as_object().expect("object");
+
+        assert_eq!(
+            obj["env_filter"],
+            serde_json::json!({
+                "mode": "restricted",
+                "names": ["PATH", "HOME"],
+            }),
+            "env_filter must surface the allow-list verbatim",
+        );
+        assert_eq!(
+            obj["override_deny_paths"],
+            serde_json::json!(["/tmp/exempted", "/var/audit"]),
+            "override_deny_paths must serialize as string array",
         );
     }
 }
