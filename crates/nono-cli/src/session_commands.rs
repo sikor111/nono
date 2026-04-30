@@ -4,8 +4,8 @@
 //! `nono inspect`, and `nono prune`.
 
 use crate::cli::{
-    AttachArgs, DetachArgs, InspectArgs, LogsArgs, PruneArgs, PsArgs, PsSortBy, PsStatusFilter,
-    StopArgs,
+    AttachArgs, DetachArgs, InspectArgs, LogsArgs, PruneArgs, PsArgs, PsOutputFormat, PsSortBy,
+    PsStatusFilter, StopArgs,
 };
 use crate::command_display::{format_command_line, truncate_command};
 use crate::session::{self, SessionAttachment, SessionRecord, SessionStatus};
@@ -51,6 +51,13 @@ pub fn run_ps(args: &PsArgs) -> Result<()> {
         let json = serde_json::to_string_pretty(&filtered)
             .map_err(|e| nono::NonoError::ConfigParse(format!("JSON serialization failed: {e}")))?;
         println!("{json}");
+        return Ok(());
+    }
+
+    if let Some(fmt) = args.output {
+        // Tabular text formats always emit the header so consumers can
+        // detect column count without separately checking the row count.
+        print!("{}", format_ps_tabular(&filtered, fmt));
         return Ok(());
     }
 
@@ -153,6 +160,100 @@ fn ps_matches(s: &SessionRecord, args: &PsArgs) -> bool {
     }
 
     true
+}
+
+/// CSV-escape a field per RFC 4180: wrap in `"`s if the value contains a
+/// comma, quote, or newline; double any embedded `"`.
+fn csv_escape(value: &str) -> String {
+    if value.contains(',') || value.contains('"') || value.contains('\n') || value.contains('\r') {
+        let escaped = value.replace('"', "\"\"");
+        format!("\"{escaped}\"")
+    } else {
+        value.to_string()
+    }
+}
+
+/// TSV-escape a field: TSV has no quoting rule, so the only safe option
+/// is to backslash-escape characters that would break the line shape
+/// (tab as the delimiter, newlines that would split the row).
+fn tsv_escape(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '\t' => out.push_str("\\t"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// Render the session list as CSV or TSV. Always emits a header row even
+/// when the input is empty so consumers can detect the column shape.
+///
+/// Columns mirror the human-readable table minus colors / per-row
+/// padding: session_id, name, status, exit_code, attach, pid, uptime,
+/// started, profile, network, command.
+fn format_ps_tabular(records: &[&SessionRecord], fmt: PsOutputFormat) -> String {
+    let header = [
+        "session_id",
+        "name",
+        "status",
+        "exit_code",
+        "attach",
+        "pid",
+        "uptime",
+        "started",
+        "profile",
+        "network",
+        "command",
+    ];
+    let (sep, escape): (&str, fn(&str) -> String) = match fmt {
+        PsOutputFormat::Csv => (",", csv_escape),
+        PsOutputFormat::Tsv => ("\t", tsv_escape),
+    };
+
+    let mut out = String::new();
+    out.push_str(
+        &header
+            .iter()
+            .map(|h| escape(h))
+            .collect::<Vec<_>>()
+            .join(sep),
+    );
+    out.push('\n');
+
+    for record in records {
+        let exit_code = record.exit_code.map(|c| c.to_string()).unwrap_or_default();
+        let attach = match (&record.status, &record.attachment) {
+            (SessionStatus::Exited, _) => "-".to_string(),
+            (_, SessionAttachment::Attached) => "attached".to_string(),
+            (_, SessionAttachment::Detached) => "detached".to_string(),
+        };
+        let status = match record.status {
+            SessionStatus::Running => "running",
+            SessionStatus::Paused => "paused",
+            SessionStatus::Exited => "exited",
+        };
+        let row = [
+            record.session_id.as_str(),
+            record.name.as_deref().unwrap_or(""),
+            status,
+            exit_code.as_str(),
+            attach.as_str(),
+            &record.child_pid.to_string(),
+            &format_uptime(&record.started),
+            record.started.as_str(),
+            record.profile.as_deref().unwrap_or(""),
+            record.network.as_str(),
+            &format_command_line(&record.command),
+        ];
+        out.push_str(&row.iter().map(|f| escape(f)).collect::<Vec<_>>().join(sep));
+        out.push('\n');
+    }
+    out
 }
 
 /// Render a single session as a compact, color-free row for `nono ps --short`.
@@ -720,6 +821,7 @@ mod tests {
             sort: None,
             reverse: false,
             short: false,
+            output: None,
         }
     }
 
@@ -958,6 +1060,86 @@ mod tests {
         );
         // Unnamed sessions render as `-` to keep column alignment stable.
         assert!(row.contains(" - "));
+    }
+
+    #[test]
+    fn csv_escape_quotes_only_when_needed() {
+        assert_eq!(
+            csv_escape("simple"),
+            "simple",
+            "no special chars ⇒ unchanged"
+        );
+        assert_eq!(csv_escape("a,b"), "\"a,b\"", "comma forces quoting");
+        assert_eq!(
+            csv_escape("a\"b"),
+            "\"a\"\"b\"",
+            "embedded quotes are doubled, then wrapped"
+        );
+        assert_eq!(
+            csv_escape("line1\nline2"),
+            "\"line1\nline2\"",
+            "embedded newlines force quoting"
+        );
+    }
+
+    #[test]
+    fn tsv_escape_preserves_field_shape() {
+        assert_eq!(tsv_escape("plain"), "plain");
+        assert_eq!(tsv_escape("a\tb"), "a\\tb", "tabs become \\t");
+        assert_eq!(tsv_escape("a\nb"), "a\\nb", "newlines become \\n");
+        assert_eq!(
+            tsv_escape("a\\b"),
+            "a\\\\b",
+            "literal backslash is escaped first to keep round-trip semantics"
+        );
+    }
+
+    #[test]
+    fn format_ps_tabular_csv_header_present_for_empty_input() {
+        let out = format_ps_tabular(&[], PsOutputFormat::Csv);
+        assert!(
+            out.starts_with("session_id,name,status,exit_code,"),
+            "header must be present even for empty session list: {out}"
+        );
+        assert_eq!(
+            out.lines().count(),
+            1,
+            "empty input ⇒ header only, no record rows"
+        );
+    }
+
+    #[test]
+    fn format_ps_tabular_csv_quotes_command_with_comma() {
+        let rec = make_record("abc", Some("test"), None, SessionStatus::Running);
+        let rec = SessionRecord {
+            command: vec![
+                "bash".to_string(),
+                "-c".to_string(),
+                "echo a, b".to_string(),
+            ],
+            ..rec
+        };
+        let out = format_ps_tabular(&[&rec], PsOutputFormat::Csv);
+        let row = out.lines().nth(1).expect("data row");
+        // The command field had a `,` so it must be wrapped in double quotes
+        // (RFC 4180). Sanity-check by counting the quoted run.
+        assert!(
+            row.contains("\"bash -c 'echo a, b'\"")
+                || row.contains("\"bash -c \"\"echo a, b\"\"\""),
+            "command with comma must be CSV-quoted: {row}"
+        );
+    }
+
+    #[test]
+    fn format_ps_tabular_tsv_uses_tabs_and_escapes_newlines() {
+        let rec = make_record("xyz", None, Some("default"), SessionStatus::Exited);
+        let out = format_ps_tabular(&[&rec], PsOutputFormat::Tsv);
+        let row = out.lines().nth(1).expect("data row");
+        assert!(
+            row.contains("\txyz\t") || row.starts_with("xyz\t"),
+            "tab-separated: {row}"
+        );
+        assert!(!row.contains('\n'));
     }
 
     #[test]

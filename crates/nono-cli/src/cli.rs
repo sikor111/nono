@@ -1970,6 +1970,20 @@ pub enum PsSortBy {
     Profile,
 }
 
+/// Tabular output format for `nono ps --output`.
+///
+/// Csv and Tsv emit a header row followed by one record per line, with
+/// proper escaping of separator/quote characters in command arguments.
+/// Csv mode uses RFC 4180 quoting; Tsv mode encodes newlines, tabs, and
+/// carriage returns using backslash escapes so each record stays on a
+/// single line.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+#[clap(rename_all = "lowercase")]
+pub enum PsOutputFormat {
+    Csv,
+    Tsv,
+}
+
 #[derive(Parser, Debug)]
 pub struct PsArgs {
     /// Output as JSON
@@ -2009,6 +2023,11 @@ pub struct PsArgs {
     /// output pipes cleanly into tools like `column`, `cut`, or `awk`.
     #[arg(long)]
     pub short: bool,
+
+    /// Tabular output format for piping into data tools (`csv`, `tsv`).
+    /// Conflicts with `--json` because both ask for a non-table view.
+    #[arg(long, value_enum, value_name = "FMT", conflicts_with = "json")]
+    pub output: Option<PsOutputFormat>,
 }
 
 #[derive(Parser, Debug)]
