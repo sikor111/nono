@@ -45,6 +45,8 @@ pub(crate) fn run_why(args: WhyArgs) -> Result<()> {
             write_file: args.write_file.clone(),
             block_net: args.block_net,
             workdir: args.workdir.clone(),
+            allow_command: args.allow_command.clone(),
+            block_command: args.block_command.clone(),
             ..SandboxArgs::default()
         };
 
@@ -76,6 +78,8 @@ pub(crate) fn run_why(args: WhyArgs) -> Result<()> {
             write_file: args.write_file.clone(),
             block_net: args.block_net,
             workdir: args.workdir.clone(),
+            allow_command: args.allow_command.clone(),
+            block_command: args.block_command.clone(),
             ..SandboxArgs::default()
         };
 

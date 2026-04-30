@@ -1593,6 +1593,18 @@ pub struct WhyArgs {
     #[arg(long = "block-net", alias = "net-block", help_heading = "CONTEXT")]
     pub block_net: bool,
 
+    /// Add a command to the allow-list for this query (overrides blocklist).
+    /// Mirrors `nono run --allow-command` so `nono why --command rm
+    /// --allow-command rm` answers the same way as the runtime would.
+    #[arg(long, value_name = "CMD", help_heading = "CONTEXT")]
+    pub allow_command: Vec<String>,
+
+    /// Add a command to the block-list for this query. Lets users probe
+    /// command policy without authoring a profile first
+    /// (e.g. `nono why --command dd --block-command dd`).
+    #[arg(long, value_name = "CMD", help_heading = "CONTEXT")]
+    pub block_command: Vec<String>,
+
     /// Use a named profile for query context
     #[arg(long, short = 'p', value_name = "NAME", help_heading = "CONTEXT")]
     pub profile: Option<String>,
@@ -2419,6 +2431,30 @@ mod tests {
             assert_eq!(args.logs_tail, None);
         } else {
             panic!("expected Inspect command");
+        }
+    }
+
+    #[test]
+    fn why_accepts_command_overrides_without_a_profile() {
+        // Adding allow/block command flags on `nono why` lets the user
+        // probe command policy ad-hoc without authoring a profile first.
+        let cli = Cli::try_parse_from([
+            "nono",
+            "why",
+            "--command",
+            "rm",
+            "--block-command",
+            "rm",
+            "--allow-command",
+            "echo",
+        ])
+        .expect("should parse");
+        if let Commands::Why(args) = cli.command {
+            assert_eq!(args.command_name.as_deref(), Some("rm"));
+            assert_eq!(args.block_command, vec!["rm".to_string()]);
+            assert_eq!(args.allow_command, vec!["echo".to_string()]);
+        } else {
+            panic!("expected Why command");
         }
     }
 
