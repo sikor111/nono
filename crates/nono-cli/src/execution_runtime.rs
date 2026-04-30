@@ -172,10 +172,8 @@ pub(crate) fn execute_sandboxed(plan: LaunchPlan) -> Result<()> {
     if let Some(blocked) =
         config::check_blocked_command(&program, caps.allowed_commands(), caps.blocked_commands())?
     {
-        let reason = blocked_command_reason_with_hint(
-            &blocked,
-            flags.session.profile_name.as_deref(),
-        );
+        let reason =
+            blocked_command_reason_with_hint(&blocked, flags.session.profile_name.as_deref());
         return Err(NonoError::BlockedCommand {
             command: blocked,
             reason,
