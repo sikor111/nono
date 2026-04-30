@@ -2003,6 +2003,12 @@ pub struct PsArgs {
     /// natural order (e.g. `--sort started --reverse` lists oldest first).
     #[arg(long)]
     pub reverse: bool,
+
+    /// Compact mode for narrow terminals — drops PID, UPTIME, PROFILE,
+    /// and ATTACH columns and writes plain text (no ANSI colors) so the
+    /// output pipes cleanly into tools like `column`, `cut`, or `awk`.
+    #[arg(long)]
+    pub short: bool,
 }
 
 #[derive(Parser, Debug)]

@@ -59,6 +59,14 @@ pub fn run_ps(args: &PsArgs) -> Result<()> {
         return Ok(());
     }
 
+    if args.short {
+        println!("{:<16} {:<12} {:<12} COMMAND", "SESSION", "NAME", "STATUS");
+        for session in &filtered {
+            println!("{}", format_ps_short_row(session, 60));
+        }
+        return Ok(());
+    }
+
     // Table header
     println!(
         "{:<16} {:<12} {:<12} {:<12} {:<8} {:<10} {:<14} COMMAND",
@@ -145,6 +153,28 @@ fn ps_matches(s: &SessionRecord, args: &PsArgs) -> bool {
     }
 
     true
+}
+
+/// Render a single session as a compact, color-free row for `nono ps --short`.
+///
+/// Drops the columns least relevant to "which session is which?" (PID,
+/// UPTIME, PROFILE, ATTACH) and skips ANSI color codes so the output
+/// pipes cleanly into `awk`/`cut`/`column`. Status text keeps the
+/// `exited(<code>)` suffix because the exit code is the single most
+/// useful piece of information for a finished session.
+fn format_ps_short_row(record: &SessionRecord, max_command_len: usize) -> String {
+    let name = record.name.as_deref().unwrap_or("-");
+    let exit_code = record.exit_code.unwrap_or(-1);
+    let status = match record.status {
+        SessionStatus::Running => "running".to_string(),
+        SessionStatus::Paused => "paused".to_string(),
+        SessionStatus::Exited => format!("exited({exit_code})"),
+    };
+    let command = truncate_command(&record.command, max_command_len);
+    format!(
+        "{:<16} {:<12} {:<12} {}",
+        record.session_id, name, status, command
+    )
 }
 
 /// Numeric rank for `SessionStatus` so `--sort status` gives the most
@@ -689,6 +719,7 @@ mod tests {
             status: None,
             sort: None,
             reverse: false,
+            short: false,
         }
     }
 
@@ -872,6 +903,74 @@ mod tests {
         assert_eq!(
             sort_session_ids(&records, PsSortBy::Started),
             vec!["aaa", "mmm", "zzz"],
+        );
+    }
+
+    fn full_record_for_short_row(
+        id: &str,
+        name: Option<&str>,
+        status: SessionStatus,
+        exit_code: Option<i32>,
+        command: Vec<String>,
+    ) -> SessionRecord {
+        SessionRecord {
+            exit_code,
+            command,
+            ..make_record(id, name, None, status)
+        }
+    }
+
+    #[test]
+    fn ps_short_row_omits_ansi_and_uses_named_status_for_running() {
+        let rec = full_record_for_short_row(
+            "abc12345",
+            Some("claude-1"),
+            SessionStatus::Running,
+            None,
+            vec!["echo".to_string(), "hi".to_string()],
+        );
+        let row = format_ps_short_row(&rec, 60);
+
+        assert!(
+            !row.contains('\x1b'),
+            "short row must be plain text (no ANSI escapes): {row:?}"
+        );
+        assert!(row.contains("abc12345"));
+        assert!(row.contains("claude-1"));
+        assert!(row.contains("running"));
+        assert!(row.contains("echo hi"));
+    }
+
+    #[test]
+    fn ps_short_row_renders_exit_code_for_exited_status() {
+        let rec = full_record_for_short_row(
+            "deadbeef",
+            None,
+            SessionStatus::Exited,
+            Some(127),
+            vec!["bash".to_string(), "-c".to_string(), "false".to_string()],
+        );
+        let row = format_ps_short_row(&rec, 60);
+
+        assert!(
+            row.contains("exited(127)"),
+            "exit code must be visible after the status word: {row:?}"
+        );
+        // Unnamed sessions render as `-` to keep column alignment stable.
+        assert!(row.contains(" - "));
+    }
+
+    #[test]
+    fn ps_short_row_truncates_command_to_max_len() {
+        let long: String = "x".repeat(200);
+        let rec = full_record_for_short_row("abc", None, SessionStatus::Running, None, vec![long]);
+        let row = format_ps_short_row(&rec, 32);
+        // The truncate helper uses an ellipsis; the visible command must
+        // never exceed the cap (give a small fudge for trailing chars).
+        let cmd_section = row.split_whitespace().last().unwrap_or("");
+        assert!(
+            cmd_section.chars().count() <= 35,
+            "command got past max_command_len: {cmd_section:?}"
         );
     }
 
