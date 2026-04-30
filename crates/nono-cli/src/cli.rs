@@ -1922,6 +1922,19 @@ pub enum SessionCommands {
     Cleanup(PruneArgs),
 }
 
+/// Status filter accepted by `nono ps --status`.
+///
+/// Setting any status overrides the default "exclude exited" behavior of
+/// `--all` so users can ask for *only* exited sessions without having to
+/// add `--all` separately.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+#[clap(rename_all = "lowercase")]
+pub enum PsStatusFilter {
+    Running,
+    Paused,
+    Exited,
+}
+
 #[derive(Parser, Debug)]
 pub struct PsArgs {
     /// Output as JSON
@@ -1931,6 +1944,20 @@ pub struct PsArgs {
     /// Include exited sessions
     #[arg(long)]
     pub all: bool,
+
+    /// Filter by session name — case-insensitive substring match.
+    /// Sessions without a name are excluded.
+    #[arg(long, value_name = "PATTERN")]
+    pub name: Option<String>,
+
+    /// Filter by profile — exact match. Sessions launched without a profile
+    /// are excluded when this flag is set.
+    #[arg(long, value_name = "NAME")]
+    pub profile: Option<String>,
+
+    /// Filter by lifecycle status (overrides `--all`'s exited behavior).
+    #[arg(long, value_enum, value_name = "STATUS")]
+    pub status: Option<PsStatusFilter>,
 }
 
 #[derive(Parser, Debug)]

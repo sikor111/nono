@@ -3,7 +3,9 @@
 //! Handles `nono ps`, `nono stop`, `nono detach`, `nono attach`, `nono logs`,
 //! `nono inspect`, and `nono prune`.
 
-use crate::cli::{AttachArgs, DetachArgs, InspectArgs, LogsArgs, PruneArgs, PsArgs, StopArgs};
+use crate::cli::{
+    AttachArgs, DetachArgs, InspectArgs, LogsArgs, PruneArgs, PsArgs, PsStatusFilter, StopArgs,
+};
 use crate::command_display::{format_command_line, truncate_command};
 use crate::session::{self, SessionAttachment, SessionRecord, SessionStatus};
 use colored::Colorize;
@@ -31,12 +33,7 @@ fn reject_if_sandboxed(command: &str) -> Result<()> {
 /// Dispatch `nono ps`.
 pub fn run_ps(args: &PsArgs) -> Result<()> {
     let sessions = session::list_sessions()?;
-
-    // Filter: by default show live sessions, whether attached or detached.
-    let filtered: Vec<&SessionRecord> = sessions
-        .iter()
-        .filter(|s| args.all || s.status != SessionStatus::Exited)
-        .collect();
+    let filtered: Vec<&SessionRecord> = sessions.iter().filter(|s| ps_matches(s, args)).collect();
 
     if args.json {
         let json = serde_json::to_string_pretty(&filtered)
@@ -46,11 +43,7 @@ pub fn run_ps(args: &PsArgs) -> Result<()> {
     }
 
     if filtered.is_empty() {
-        if args.all {
-            eprintln!("No sessions found.");
-        } else {
-            eprintln!("No running or detached sessions. Use --all to include exited sessions.");
-        }
+        eprintln!("{}", empty_filter_message(args));
         return Ok(());
     }
 
@@ -102,6 +95,56 @@ pub fn run_ps(args: &PsArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Decide whether a session passes the active `nono ps` filters.
+///
+/// Filters compose as AND: a session must satisfy every flag the user
+/// supplied. The status decision is layered:
+///
+/// 1. If `--status` is set, only sessions with that status pass.
+/// 2. Else if `--all` is set, every status passes.
+/// 3. Otherwise the legacy default applies — exited sessions are hidden.
+///
+/// On top of that, `--name` and `--profile` apply if set.
+fn ps_matches(s: &SessionRecord, args: &PsArgs) -> bool {
+    let status_ok = match args.status {
+        Some(PsStatusFilter::Running) => s.status == SessionStatus::Running,
+        Some(PsStatusFilter::Paused) => s.status == SessionStatus::Paused,
+        Some(PsStatusFilter::Exited) => s.status == SessionStatus::Exited,
+        None => args.all || s.status != SessionStatus::Exited,
+    };
+    if !status_ok {
+        return false;
+    }
+
+    if let Some(pat) = args.name.as_deref() {
+        let needle = pat.to_lowercase();
+        match s.name.as_deref() {
+            Some(name) if name.to_lowercase().contains(&needle) => {}
+            _ => return false,
+        }
+    }
+
+    if let Some(profile) = args.profile.as_deref() {
+        if s.profile.as_deref() != Some(profile) {
+            return false;
+        }
+    }
+
+    true
+}
+
+/// Build the user-facing "no sessions" message that mirrors the active
+/// filter set, so the user understands *why* the table is empty.
+fn empty_filter_message(args: &PsArgs) -> &'static str {
+    if args.name.is_some() || args.profile.is_some() || args.status.is_some() {
+        "No sessions match the requested filters."
+    } else if args.all {
+        "No sessions found."
+    } else {
+        "No running or detached sessions. Use --all to include exited sessions."
+    }
 }
 
 /// Format uptime from an ISO 8601 start time string.
@@ -505,5 +548,156 @@ mod tests {
         let started = (now - chrono::Duration::minutes(5)).to_rfc3339();
         let result = format_uptime(&started);
         assert!(result.ends_with('m'));
+    }
+
+    fn make_record(
+        id: &str,
+        name: Option<&str>,
+        profile: Option<&str>,
+        status: SessionStatus,
+    ) -> SessionRecord {
+        SessionRecord {
+            session_id: id.to_string(),
+            name: name.map(str::to_string),
+            supervisor_pid: 1,
+            child_pid: 2,
+            started: "2026-04-30T22:00:00+00:00".to_string(),
+            started_epoch: 0,
+            status,
+            attachment: SessionAttachment::Detached,
+            exit_code: None,
+            command: vec!["echo".to_string()],
+            profile: profile.map(str::to_string),
+            workdir: std::path::PathBuf::from("/tmp"),
+            network: "blocked".to_string(),
+            rollback_session: None,
+        }
+    }
+
+    fn ps_args() -> PsArgs {
+        PsArgs {
+            json: false,
+            all: false,
+            name: None,
+            profile: None,
+            status: None,
+        }
+    }
+
+    #[test]
+    fn ps_filter_default_hides_exited_but_keeps_running() {
+        let running = make_record("a", None, None, SessionStatus::Running);
+        let exited = make_record("b", None, None, SessionStatus::Exited);
+        let args = ps_args();
+        assert!(ps_matches(&running, &args));
+        assert!(!ps_matches(&exited, &args));
+    }
+
+    #[test]
+    fn ps_filter_all_includes_exited() {
+        let exited = make_record("b", None, None, SessionStatus::Exited);
+        let args = PsArgs {
+            all: true,
+            ..ps_args()
+        };
+        assert!(ps_matches(&exited, &args));
+    }
+
+    #[test]
+    fn ps_filter_status_overrides_default_and_pins_a_single_status() {
+        let running = make_record("a", None, None, SessionStatus::Running);
+        let exited = make_record("b", None, None, SessionStatus::Exited);
+        let paused = make_record("c", None, None, SessionStatus::Paused);
+
+        let args = PsArgs {
+            status: Some(PsStatusFilter::Exited),
+            ..ps_args()
+        };
+        // No --all needed: --status exited should let exited sessions through.
+        assert!(ps_matches(&exited, &args));
+        assert!(!ps_matches(&running, &args));
+        assert!(!ps_matches(&paused, &args));
+    }
+
+    #[test]
+    fn ps_filter_name_uses_case_insensitive_substring_and_skips_unnamed() {
+        let claude = make_record("a", Some("Claude-1"), None, SessionStatus::Running);
+        let codex = make_record("b", Some("codex"), None, SessionStatus::Running);
+        let unnamed = make_record("c", None, None, SessionStatus::Running);
+        let args = PsArgs {
+            name: Some("CLAUDE".to_string()),
+            ..ps_args()
+        };
+        assert!(ps_matches(&claude, &args), "case-insensitive substring");
+        assert!(!ps_matches(&codex, &args));
+        assert!(
+            !ps_matches(&unnamed, &args),
+            "sessions without a name are filtered out, not matched"
+        );
+    }
+
+    #[test]
+    fn ps_filter_profile_requires_exact_match_and_skips_unprofiled() {
+        let claude = make_record("a", None, Some("claude-code"), SessionStatus::Running);
+        let claude_stretch = make_record(
+            "b",
+            None,
+            Some("claude-code-stretch"),
+            SessionStatus::Running,
+        );
+        let no_profile = make_record("c", None, None, SessionStatus::Running);
+        let args = PsArgs {
+            profile: Some("claude-code".to_string()),
+            ..ps_args()
+        };
+        assert!(ps_matches(&claude, &args));
+        assert!(
+            !ps_matches(&claude_stretch, &args),
+            "exact match — substring of another profile must NOT pass"
+        );
+        assert!(!ps_matches(&no_profile, &args));
+    }
+
+    #[test]
+    fn ps_filter_combines_filters_with_and() {
+        let target = make_record(
+            "a",
+            Some("review-bot"),
+            Some("default"),
+            SessionStatus::Running,
+        );
+        let wrong_profile = make_record(
+            "b",
+            Some("review-bot"),
+            Some("opencode"),
+            SessionStatus::Running,
+        );
+        let wrong_name = make_record("c", Some("other"), Some("default"), SessionStatus::Running);
+        let args = PsArgs {
+            name: Some("review".to_string()),
+            profile: Some("default".to_string()),
+            ..ps_args()
+        };
+        assert!(ps_matches(&target, &args));
+        assert!(!ps_matches(&wrong_profile, &args));
+        assert!(!ps_matches(&wrong_name, &args));
+    }
+
+    #[test]
+    fn empty_filter_message_reflects_active_flags() {
+        let plain = ps_args();
+        assert!(empty_filter_message(&plain).contains("Use --all"));
+
+        let with_all = PsArgs {
+            all: true,
+            ..ps_args()
+        };
+        assert_eq!(empty_filter_message(&with_all), "No sessions found.");
+
+        let with_filter = PsArgs {
+            profile: Some("default".to_string()),
+            ..ps_args()
+        };
+        assert!(empty_filter_message(&with_filter).contains("filters"));
     }
 }
