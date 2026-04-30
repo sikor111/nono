@@ -84,6 +84,12 @@ pub(crate) fn run_sandbox(mut run_args: RunArgs, silent: bool) -> Result<()> {
         let extras = output::DryRunJsonExtras {
             allowed_env_vars: prepared.allowed_env_vars.as_deref(),
             override_deny_paths: &prepared.override_deny_paths,
+            network_profile: prepared.network_profile.as_deref(),
+            allow_domain: &prepared.allow_domain,
+            listen_ports: &prepared.listen_ports,
+            capability_elevation: prepared.capability_elevation,
+            allow_launch_services_active: prepared.allow_launch_services_active,
+            allow_gpu_active: prepared.allow_gpu_active,
         };
         return output::print_capabilities_json(
             &prepared.caps,
@@ -126,6 +132,12 @@ pub(crate) fn run_shell(args: ShellArgs, silent: bool) -> Result<()> {
         let extras = output::DryRunJsonExtras {
             allowed_env_vars: prepared.allowed_env_vars.as_deref(),
             override_deny_paths: &prepared.override_deny_paths,
+            network_profile: prepared.network_profile.as_deref(),
+            allow_domain: &prepared.allow_domain,
+            listen_ports: &prepared.listen_ports,
+            capability_elevation: prepared.capability_elevation,
+            allow_launch_services_active: prepared.allow_launch_services_active,
+            allow_gpu_active: prepared.allow_gpu_active,
         };
         return output::print_capabilities_json(
             &prepared.caps,
@@ -217,6 +229,12 @@ pub(crate) fn run_wrap(wrap_args: WrapArgs, silent: bool) -> Result<()> {
         let extras = output::DryRunJsonExtras {
             allowed_env_vars: prepared.allowed_env_vars.as_deref(),
             override_deny_paths: &prepared.override_deny_paths,
+            network_profile: prepared.network_profile.as_deref(),
+            allow_domain: &prepared.allow_domain,
+            listen_ports: &prepared.listen_ports,
+            capability_elevation: prepared.capability_elevation,
+            allow_launch_services_active: prepared.allow_launch_services_active,
+            allow_gpu_active: prepared.allow_gpu_active,
         };
         return output::print_capabilities_json(
             &prepared.caps,

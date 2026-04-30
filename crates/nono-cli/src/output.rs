@@ -614,18 +614,42 @@ pub struct DryRunJsonExtras<'a> {
     /// directive. These are policy-relevant for security audits because
     /// they widen access beyond the default sensitive-path lockdown.
     pub override_deny_paths: &'a [PathBuf],
+    /// Name of the network profile in effect (e.g. `developer`, `minimal`),
+    /// or `None` if proxy mode wasn't activated.
+    pub network_profile: Option<&'a str>,
+    /// Domains the proxy is configured to allow outbound HTTP/S to.
+    pub allow_domain: &'a [String],
+    /// Listen ports the sandboxed process is allowed to bind on (proxy +
+    /// any explicit `--allow-port` entries). Empty for non-proxy modes.
+    pub listen_ports: &'a [u16],
+    /// Sandbox extension support requested (macOS dynamic capability
+    /// expansion via `sandbox_extension_consume`).
+    pub capability_elevation: bool,
+    /// macOS Launch Services (`/System/Library/Frameworks/.../LaunchServices`)
+    /// access enabled — present in profiles that need to open URLs/apps.
+    pub allow_launch_services_active: bool,
+    /// GPU access enabled — adds platform rules permitting access to
+    /// graphics frameworks (Metal on macOS, DRI on Linux).
+    pub allow_gpu_active: bool,
 }
 
 #[cfg(test)]
 impl<'a> DryRunJsonExtras<'a> {
-    /// Empty extras (no env filter, no override-deny paths) — used in unit
-    /// tests where the caller wants the minimum schema shape. Production
-    /// callers always populate this from `PreparedSandbox`.
+    /// Empty extras (no env filter, no override-deny paths, no proxy
+    /// metadata) — used in unit tests where the caller wants the minimum
+    /// schema shape. Production callers always populate this from
+    /// `PreparedSandbox`.
     #[must_use]
     pub fn empty() -> Self {
         Self {
             allowed_env_vars: None,
             override_deny_paths: &[],
+            network_profile: None,
+            allow_domain: &[],
+            listen_ports: &[],
+            capability_elevation: false,
+            allow_launch_services_active: false,
+            allow_gpu_active: false,
         }
     }
 }
@@ -699,6 +723,12 @@ pub fn capabilities_to_json(
         "secrets_count": secrets_count,
         "env_filter": env_filter,
         "override_deny_paths": override_deny_paths,
+        "network_profile": extras.network_profile,
+        "allow_domain": extras.allow_domain,
+        "listen_ports": extras.listen_ports,
+        "capability_elevation": extras.capability_elevation,
+        "allow_launch_services_active": extras.allow_launch_services_active,
+        "allow_gpu_active": extras.allow_gpu_active,
     })
 }
 
@@ -1061,6 +1091,12 @@ mod tests {
             "ipc_mode",
             "extensions_enabled",
             "platform_rules_count",
+            "network_profile",
+            "allow_domain",
+            "listen_ports",
+            "capability_elevation",
+            "allow_launch_services_active",
+            "allow_gpu_active",
             "allowed_commands",
             "blocked_commands",
             "secrets_count",
@@ -1146,6 +1182,7 @@ mod tests {
         let extras = DryRunJsonExtras {
             allowed_env_vars: Some(&env_names),
             override_deny_paths: &override_paths,
+            ..DryRunJsonExtras::empty()
         };
 
         let value = capabilities_to_json(&caps, OsStr::new("/bin/sh"), &[], 0, &extras);
@@ -1164,5 +1201,64 @@ mod tests {
             serde_json::json!(["/tmp/exempted", "/var/audit"]),
             "override_deny_paths must serialize as string array",
         );
+    }
+
+    #[test]
+    fn capabilities_to_json_emits_proxy_and_platform_metadata() {
+        // Network profile + proxy domain allowlist + listen ports +
+        // platform-specific access flags must surface in the JSON so a
+        // policy auditor can answer "what proxy was active, what could
+        // bind, did GPU/LaunchServices unlock?" without re-running.
+        let caps = CapabilitySet::new();
+        let domains: Vec<String> = vec!["api.openai.com".to_string(), "claude.ai".to_string()];
+        let listen_ports: [u16; 2] = [8080, 9090];
+        let extras = DryRunJsonExtras {
+            network_profile: Some("developer"),
+            allow_domain: &domains,
+            listen_ports: &listen_ports,
+            capability_elevation: true,
+            allow_launch_services_active: true,
+            allow_gpu_active: false,
+            ..DryRunJsonExtras::empty()
+        };
+
+        let value = capabilities_to_json(&caps, OsStr::new("/bin/sh"), &[], 0, &extras);
+        let obj = value.as_object().expect("object");
+
+        assert_eq!(obj["network_profile"], serde_json::json!("developer"));
+        assert_eq!(
+            obj["allow_domain"],
+            serde_json::json!(["api.openai.com", "claude.ai"])
+        );
+        assert_eq!(obj["listen_ports"], serde_json::json!([8080, 9090]));
+        assert_eq!(obj["capability_elevation"], serde_json::json!(true));
+        assert_eq!(obj["allow_launch_services_active"], serde_json::json!(true));
+        assert_eq!(obj["allow_gpu_active"], serde_json::json!(false));
+    }
+
+    #[test]
+    fn capabilities_to_json_defaults_proxy_metadata_to_inert_values() {
+        // Without any proxy / launch-services / GPU metadata the document
+        // must still expose every key — defaulting to null/empty/false —
+        // so consumers don't have to differentiate "missing" from "off".
+        let caps = CapabilitySet::new();
+        let value = capabilities_to_json(
+            &caps,
+            OsStr::new("/bin/sh"),
+            &[],
+            0,
+            &DryRunJsonExtras::empty(),
+        );
+        let obj = value.as_object().expect("object");
+
+        assert!(obj["network_profile"].is_null());
+        assert_eq!(obj["allow_domain"], serde_json::json!([]));
+        assert_eq!(obj["listen_ports"], serde_json::json!([]));
+        assert_eq!(obj["capability_elevation"], serde_json::json!(false));
+        assert_eq!(
+            obj["allow_launch_services_active"],
+            serde_json::json!(false)
+        );
+        assert_eq!(obj["allow_gpu_active"], serde_json::json!(false));
     }
 }
