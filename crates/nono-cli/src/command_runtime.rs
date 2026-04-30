@@ -76,6 +76,19 @@ pub(crate) fn run_sandbox(mut run_args: RunArgs, silent: bool) -> Result<()> {
         return Ok(());
     }
 
+    if args.dry_run_json {
+        // Suppress the human-readable capability listing so stdout contains
+        // exactly one JSON document and nothing else.
+        let prepared = prepare_sandbox(&args, true)?;
+        validate_external_proxy_bypass(&args, &prepared)?;
+        return output::print_capabilities_json(
+            &prepared.caps,
+            &program,
+            &cmd_args,
+            prepared.secrets.len(),
+        );
+    }
+
     let launch_plan = prepare_run_launch_plan(run_args, program, cmd_args, silent)?;
     execute_sandboxed(launch_plan)
 }

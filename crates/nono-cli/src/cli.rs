@@ -1107,6 +1107,13 @@ pub struct SandboxArgs {
     /// Show what would be sandboxed without executing
     #[arg(long, help_heading = "OPTIONS")]
     pub dry_run: bool,
+
+    /// Like --dry-run, but emit a structured JSON snapshot of the resolved
+    /// capabilities and planned command to stdout (one JSON document per
+    /// invocation). Intended for tooling integration. Currently honored by
+    /// `nono run` only; other subcommands ignore this flag (MVP).
+    #[arg(long, help_heading = "OPTIONS", conflicts_with = "dry_run")]
+    pub dry_run_json: bool,
 }
 
 impl SandboxArgs {
@@ -1341,6 +1348,7 @@ impl From<WrapSandboxArgs> for SandboxArgs {
             config: args.config,
             verbose: args.verbose,
             dry_run: args.dry_run,
+            dry_run_json: false,
         }
     }
 }

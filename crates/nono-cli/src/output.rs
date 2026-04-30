@@ -600,6 +600,78 @@ pub fn print_dry_run(program: &OsStr, cmd_args: &[OsString], silent: bool) {
     );
 }
 
+/// Build a structured JSON snapshot of the resolved capabilities and the
+/// command that would be executed.
+///
+/// Used by `--dry-run-json` to give tooling a stable, machine-readable view
+/// of the sandbox without actually applying it. The `schema_version` field
+/// lets consumers detect breaking changes; bump it whenever fields are
+/// removed or their meaning changes.
+pub fn capabilities_to_json(
+    caps: &CapabilitySet,
+    program: &OsStr,
+    cmd_args: &[OsString],
+    secrets_count: usize,
+) -> serde_json::Value {
+    use serde_json::json;
+
+    let mut command = Vec::with_capacity(1 + cmd_args.len());
+    command.push(program.to_string_lossy().into_owned());
+    command.extend(
+        cmd_args
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned()),
+    );
+
+    let network = match caps.network_mode() {
+        NetworkMode::Blocked => json!({ "mode": "blocked" }),
+        NetworkMode::AllowAll => json!({ "mode": "allow_all" }),
+        NetworkMode::ProxyOnly { port, bind_ports } => json!({
+            "mode": "proxy_only",
+            "port": port,
+            "bind_ports": bind_ports,
+        }),
+    };
+
+    json!({
+        "schema_version": 1,
+        "command": command,
+        "filesystem": caps.fs_capabilities(),
+        "unix_sockets": caps.unix_socket_capabilities(),
+        "network": network,
+        "tcp_connect_ports": caps.tcp_connect_ports(),
+        "tcp_bind_ports": caps.tcp_bind_ports(),
+        "localhost_ports": caps.localhost_ports(),
+        "signal_mode": caps.signal_mode(),
+        "process_info_mode": caps.process_info_mode(),
+        "ipc_mode": caps.ipc_mode(),
+        "extensions_enabled": caps.extensions_enabled(),
+        "platform_rules_count": caps.platform_rules().len(),
+        "allowed_commands": caps.allowed_commands(),
+        "blocked_commands": caps.blocked_commands(),
+        "secrets_count": secrets_count,
+    })
+}
+
+/// Emit the dry-run-json snapshot to stdout (one JSON document, newline-terminated).
+///
+/// Goes to stdout (not stderr) so it can be piped directly into `jq` or other
+/// tooling. The human-readable capability listing on stderr is suppressed by
+/// the caller passing `silent=true` to `prepare_sandbox`.
+pub fn print_capabilities_json(
+    caps: &CapabilitySet,
+    program: &OsStr,
+    cmd_args: &[OsString],
+    secrets_count: usize,
+) -> Result<()> {
+    let value = capabilities_to_json(caps, program, cmd_args, secrets_count);
+    let serialized = serde_json::to_string(&value).map_err(|e| {
+        NonoError::ConfigParse(format!("failed to serialize dry-run-json output: {e}"))
+    })?;
+    println!("{}", serialized);
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Rollback / Snapshots
 // ---------------------------------------------------------------------------
@@ -832,11 +904,12 @@ pub fn print_profile_hint(program: &str, profile: &str, silent: bool) {
 #[cfg(test)]
 mod tests {
     use super::{
-        finish_status_line_for_handoff, format_unix_socket_mode_badge,
+        capabilities_to_json, finish_status_line_for_handoff, format_unix_socket_mode_badge,
         normalize_terminal_line_endings, print_applying_sandbox, print_capabilities,
         print_profile_hint, render_diagnostic_footer, take_pending_status_line,
     };
-    use nono::{CapabilitySet, UnixSocketMode};
+    use nono::{AccessMode, CapabilitySet, UnixSocketMode};
+    use std::ffi::{OsStr, OsString};
     use tempfile::tempdir;
 
     #[test]
@@ -902,5 +975,87 @@ mod tests {
 
         print_capabilities(&caps, 0, true);
         print_capabilities(&caps, 1, true);
+    }
+
+    #[test]
+    fn capabilities_to_json_emits_stable_top_level_keys() {
+        // Empty capability set + minimal command. Asserts the schema shape so
+        // downstream tooling (--dry-run-json consumers) can rely on these
+        // top-level keys existing. Bumping `schema_version` is required if
+        // any of these are removed or renamed.
+        let caps = CapabilitySet::new();
+        let program: OsString = "/bin/echo".into();
+        let cmd_args: Vec<OsString> = vec!["hello".into()];
+
+        let value = capabilities_to_json(&caps, OsStr::new(&program), &cmd_args, 0);
+        let obj = value.as_object().expect("json must be an object");
+
+        for key in [
+            "schema_version",
+            "command",
+            "filesystem",
+            "unix_sockets",
+            "network",
+            "tcp_connect_ports",
+            "tcp_bind_ports",
+            "localhost_ports",
+            "signal_mode",
+            "process_info_mode",
+            "ipc_mode",
+            "extensions_enabled",
+            "platform_rules_count",
+            "allowed_commands",
+            "blocked_commands",
+            "secrets_count",
+        ] {
+            assert!(
+                obj.contains_key(key),
+                "dry-run-json missing required key `{key}`"
+            );
+        }
+
+        assert_eq!(obj["schema_version"], serde_json::json!(1));
+        assert_eq!(
+            obj["command"],
+            serde_json::json!(["/bin/echo", "hello"]),
+            "command array must mirror the program + args"
+        );
+        assert_eq!(
+            obj["network"]["mode"],
+            serde_json::json!("allow_all"),
+            "default network mode is allow_all"
+        );
+        assert_eq!(obj["secrets_count"], serde_json::json!(0));
+        assert_eq!(
+            obj["filesystem"],
+            serde_json::json!([]),
+            "filesystem starts empty"
+        );
+    }
+
+    #[test]
+    fn capabilities_to_json_serializes_blocked_network_and_fs_entries() {
+        let dir = tempdir().expect("tempdir");
+        let caps = CapabilitySet::new()
+            .allow_path(dir.path(), AccessMode::Read)
+            .expect("read grant")
+            .block_network();
+
+        let program: OsString = "/bin/sh".into();
+        let value = capabilities_to_json(&caps, OsStr::new(&program), &[], 3);
+        let obj = value.as_object().expect("object");
+
+        assert_eq!(obj["network"]["mode"], serde_json::json!("blocked"));
+        assert_eq!(obj["secrets_count"], serde_json::json!(3));
+
+        let fs = obj["filesystem"].as_array().expect("filesystem array");
+        assert_eq!(fs.len(), 1, "exactly one fs grant");
+        let entry = &fs[0];
+        assert_eq!(entry["is_file"], serde_json::json!(false));
+        assert_eq!(
+            entry["resolved"].as_str().map(std::path::Path::new),
+            Some(dir.path().canonicalize().expect("canon").as_path()),
+            "resolved path matches canonicalized grant",
+        );
     }
 }
