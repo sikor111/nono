@@ -1947,6 +1947,21 @@ pub enum PsStatusFilter {
     Exited,
 }
 
+/// Sort key for `nono ps --sort`.
+///
+/// Each variant has a "natural" order users typically expect:
+/// `Started` newest-first, `Name`/`Profile` alphabetical ascending,
+/// `Status` running > paused > exited (most-active first). `--reverse`
+/// flips whichever order is active.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+#[clap(rename_all = "lowercase")]
+pub enum PsSortBy {
+    Started,
+    Name,
+    Status,
+    Profile,
+}
+
 #[derive(Parser, Debug)]
 pub struct PsArgs {
     /// Output as JSON
@@ -1970,6 +1985,16 @@ pub struct PsArgs {
     /// Filter by lifecycle status (overrides `--all`'s exited behavior).
     #[arg(long, value_enum, value_name = "STATUS")]
     pub status: Option<PsStatusFilter>,
+
+    /// Sort the table by started time, name, status, or profile.
+    /// Default sort is `started` (newest first), matching prior behavior.
+    #[arg(long, value_enum, value_name = "KEY")]
+    pub sort: Option<PsSortBy>,
+
+    /// Reverse the active sort order. Combine with `--sort` to flip the
+    /// natural order (e.g. `--sort started --reverse` lists oldest first).
+    #[arg(long)]
+    pub reverse: bool,
 }
 
 #[derive(Parser, Debug)]

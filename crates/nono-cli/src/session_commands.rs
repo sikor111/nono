@@ -4,7 +4,8 @@
 //! `nono inspect`, and `nono prune`.
 
 use crate::cli::{
-    AttachArgs, DetachArgs, InspectArgs, LogsArgs, PruneArgs, PsArgs, PsStatusFilter, StopArgs,
+    AttachArgs, DetachArgs, InspectArgs, LogsArgs, PruneArgs, PsArgs, PsSortBy, PsStatusFilter,
+    StopArgs,
 };
 use crate::command_display::{format_command_line, truncate_command};
 use crate::session::{self, SessionAttachment, SessionRecord, SessionStatus};
@@ -33,7 +34,18 @@ fn reject_if_sandboxed(command: &str) -> Result<()> {
 /// Dispatch `nono ps`.
 pub fn run_ps(args: &PsArgs) -> Result<()> {
     let sessions = session::list_sessions()?;
-    let filtered: Vec<&SessionRecord> = sessions.iter().filter(|s| ps_matches(s, args)).collect();
+    let mut filtered: Vec<&SessionRecord> =
+        sessions.iter().filter(|s| ps_matches(s, args)).collect();
+
+    // Apply explicit --sort if provided; otherwise keep list_sessions'
+    // newest-first ordering. --reverse always flips whatever order ends
+    // up being shown so users can pair it with the default sort too.
+    if let Some(key) = args.sort {
+        filtered.sort_by(|a, b| cmp_ps(a, b, key));
+    }
+    if args.reverse {
+        filtered.reverse();
+    }
 
     if args.json {
         let json = serde_json::to_string_pretty(&filtered)
@@ -133,6 +145,51 @@ fn ps_matches(s: &SessionRecord, args: &PsArgs) -> bool {
     }
 
     true
+}
+
+/// Numeric rank for `SessionStatus` so `--sort status` gives the most
+/// useful ordering: live work first (running ▶ paused), exited last.
+fn status_rank(status: &SessionStatus) -> u8 {
+    match status {
+        SessionStatus::Running => 0,
+        SessionStatus::Paused => 1,
+        SessionStatus::Exited => 2,
+    }
+}
+
+/// Compare two session records under the requested `nono ps --sort` key.
+///
+/// Each key has a "natural" order users typically expect; `--reverse`
+/// flips whichever ordering ends up being applied. Optional fields
+/// (`name`, `profile`) are ranked AFTER any populated value because
+/// "no name" is rarely what you're looking for in a sorted listing.
+fn cmp_ps(a: &SessionRecord, b: &SessionRecord, key: PsSortBy) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    match key {
+        // Default user-facing newest-first: bigger epoch ⇒ earlier in the
+        // list, matching `list_sessions`. Tiebreak by session_id so the
+        // sort is stable across equal timestamps.
+        PsSortBy::Started => b
+            .started_epoch
+            .cmp(&a.started_epoch)
+            .then_with(|| a.session_id.cmp(&b.session_id)),
+        PsSortBy::Name => match (a.name.as_deref(), b.name.as_deref()) {
+            (Some(x), Some(y)) => x.cmp(y).then_with(|| a.session_id.cmp(&b.session_id)),
+            (Some(_), None) => Ordering::Less,
+            (None, Some(_)) => Ordering::Greater,
+            (None, None) => a.session_id.cmp(&b.session_id),
+        },
+        PsSortBy::Status => status_rank(&a.status)
+            .cmp(&status_rank(&b.status))
+            .then_with(|| b.started_epoch.cmp(&a.started_epoch))
+            .then_with(|| a.session_id.cmp(&b.session_id)),
+        PsSortBy::Profile => match (a.profile.as_deref(), b.profile.as_deref()) {
+            (Some(x), Some(y)) => x.cmp(y).then_with(|| a.session_id.cmp(&b.session_id)),
+            (Some(_), None) => Ordering::Less,
+            (None, Some(_)) => Ordering::Greater,
+            (None, None) => a.session_id.cmp(&b.session_id),
+        },
+    }
 }
 
 /// Build the user-facing "no sessions" message that mirrors the active
@@ -630,6 +687,8 @@ mod tests {
             name: None,
             profile: None,
             status: None,
+            sort: None,
+            reverse: false,
         }
     }
 
@@ -730,6 +789,90 @@ mod tests {
         assert!(ps_matches(&target, &args));
         assert!(!ps_matches(&wrong_profile, &args));
         assert!(!ps_matches(&wrong_name, &args));
+    }
+
+    fn sort_session_ids(records: &[SessionRecord], key: PsSortBy) -> Vec<&str> {
+        let mut refs: Vec<&SessionRecord> = records.iter().collect();
+        refs.sort_by(|a, b| cmp_ps(a, b, key));
+        refs.iter().map(|r| r.session_id.as_str()).collect()
+    }
+
+    fn dated_record(id: &str, epoch: u64, status: SessionStatus) -> SessionRecord {
+        SessionRecord {
+            started_epoch: epoch,
+            ..make_record(id, None, None, status)
+        }
+    }
+
+    #[test]
+    fn ps_sort_started_puts_newest_first() {
+        let records = vec![
+            dated_record("old", 100, SessionStatus::Running),
+            dated_record("new", 300, SessionStatus::Running),
+            dated_record("mid", 200, SessionStatus::Running),
+        ];
+        assert_eq!(
+            sort_session_ids(&records, PsSortBy::Started),
+            vec!["new", "mid", "old"],
+            "newer started_epoch must come first under --sort started"
+        );
+    }
+
+    #[test]
+    fn ps_sort_status_orders_running_before_paused_before_exited() {
+        let records = vec![
+            dated_record("e", 100, SessionStatus::Exited),
+            dated_record("r", 100, SessionStatus::Running),
+            dated_record("p", 100, SessionStatus::Paused),
+        ];
+        assert_eq!(
+            sort_session_ids(&records, PsSortBy::Status),
+            vec!["r", "p", "e"],
+            "active sessions surface before exited ones",
+        );
+    }
+
+    #[test]
+    fn ps_sort_name_is_alpha_with_unnamed_last() {
+        let records = vec![
+            make_record("a", None, None, SessionStatus::Running),
+            make_record("b", Some("zeta"), None, SessionStatus::Running),
+            make_record("c", Some("alpha"), None, SessionStatus::Running),
+        ];
+        assert_eq!(
+            sort_session_ids(&records, PsSortBy::Name),
+            vec!["c", "b", "a"],
+            "named sessions sort alphabetically; unnamed go last",
+        );
+    }
+
+    #[test]
+    fn ps_sort_profile_is_alpha_with_unprofiled_last() {
+        let records = vec![
+            make_record("a", None, Some("rust-dev"), SessionStatus::Running),
+            make_record("b", None, None, SessionStatus::Running),
+            make_record("c", None, Some("default"), SessionStatus::Running),
+        ];
+        assert_eq!(
+            sort_session_ids(&records, PsSortBy::Profile),
+            vec!["c", "a", "b"],
+            "profiled sessions sort alphabetically; unprofiled go last",
+        );
+    }
+
+    #[test]
+    fn ps_sort_started_is_stable_via_session_id_tiebreak() {
+        // Identical epochs: tiebreak by session_id ascending so the order
+        // is deterministic between runs.
+        let records = vec![
+            dated_record("zzz", 100, SessionStatus::Running),
+            dated_record("aaa", 100, SessionStatus::Running),
+            dated_record("mmm", 100, SessionStatus::Running),
+        ];
+        assert_eq!(
+            sort_session_ids(&records, PsSortBy::Started),
+            vec!["aaa", "mmm", "zzz"],
+        );
     }
 
     #[test]
