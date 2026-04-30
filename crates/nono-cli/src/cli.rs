@@ -2106,6 +2106,15 @@ pub struct PruneArgs {
     #[arg(long)]
     pub dry_run: bool,
 
+    /// List the sessions that would be removed and ask for `y/N`
+    /// confirmation before deleting any of them. Conflicts with
+    /// `--dry-run` (preview-only) since both modes opt out of immediate
+    /// deletion. Refuses to run when stdin is not a TTY — there's no one
+    /// to answer the prompt, so silently treating that as "no" would be
+    /// surprising.
+    #[arg(long, conflicts_with = "dry_run")]
+    pub interactive: bool,
+
     /// Remove sessions older than N days
     #[arg(long, value_name = "DAYS")]
     pub older_than: Option<u64>,

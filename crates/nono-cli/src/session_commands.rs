@@ -12,7 +12,7 @@ use crate::session::{self, SessionAttachment, SessionRecord, SessionStatus};
 use colored::Colorize;
 use nono::{NonoError, Result};
 use std::collections::VecDeque;
-use std::io::{BufRead, Seek, SeekFrom};
+use std::io::{BufRead, IsTerminal, Seek, SeekFrom};
 use std::path::Path;
 use tracing::debug;
 
@@ -276,6 +276,17 @@ fn format_ps_short_row(record: &SessionRecord, max_command_len: usize) -> String
         "{:<16} {:<12} {:<12} {}",
         record.session_id, name, status, command
     )
+}
+
+/// Decide whether a line of stdin counts as an affirmative confirmation.
+///
+/// Defaults to "no" — `[y/N]` style — so the user has to actively confirm
+/// destructive operations. Accepts case-insensitive `y` or `yes` after
+/// trimming surrounding whitespace; everything else (including empty
+/// input from a bare Enter) is a refusal.
+fn is_yes_response(input: &str) -> bool {
+    let trimmed = input.trim().to_ascii_lowercase();
+    trimmed == "y" || trimmed == "yes"
 }
 
 /// Numeric rank for `SessionStatus` so `--sort status` gives the most
@@ -635,6 +646,35 @@ pub fn run_prune(args: &PruneArgs) -> Result<()> {
     if to_remove.is_empty() {
         eprintln!("Nothing to prune.");
         return Ok(());
+    }
+
+    if args.interactive {
+        if !std::io::stdin().is_terminal() {
+            return Err(NonoError::ConfigParse(
+                "--interactive requires a TTY on stdin (no one to answer the prompt). \
+                 Use --dry-run to preview without confirmation."
+                    .to_string(),
+            ));
+        }
+        eprintln!(
+            "The following {} session(s) will be removed:",
+            to_remove.len()
+        );
+        for s in &to_remove {
+            eprintln!("  {} (started {})", s.session_id, s.started);
+        }
+        eprintln!();
+        let mut input = String::new();
+        eprint!("Proceed? [y/N] ");
+        std::io::Write::flush(&mut std::io::stderr())
+            .map_err(|e| NonoError::ConfigParse(format!("Failed to flush prompt: {e}")))?;
+        std::io::stdin()
+            .read_line(&mut input)
+            .map_err(|e| NonoError::ConfigParse(format!("Failed to read confirmation: {e}")))?;
+        if !is_yes_response(&input) {
+            eprintln!("Aborted; nothing removed.");
+            return Ok(());
+        }
     }
 
     let dir = session::sessions_dir()?;
@@ -1154,6 +1194,22 @@ mod tests {
             cmd_section.chars().count() <= 35,
             "command got past max_command_len: {cmd_section:?}"
         );
+    }
+
+    #[test]
+    fn is_yes_response_only_accepts_y_or_yes_case_insensitive() {
+        for ok in ["y", "Y", "yes", "Yes", "YES", "  y  ", "yes\n"] {
+            assert!(
+                is_yes_response(ok),
+                "{ok:?} must count as confirmation (case-insensitive, trimmed)"
+            );
+        }
+        for nope in ["", "\n", "n", "no", "  ", "yep", "yeah", "1", "true"] {
+            assert!(
+                !is_yes_response(nope),
+                "{nope:?} must NOT count as confirmation — only literal y/yes"
+            );
+        }
     }
 
     #[test]
