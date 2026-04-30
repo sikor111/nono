@@ -116,6 +116,16 @@ pub(crate) fn run_shell(args: ShellArgs, silent: bool) -> Result<()> {
         return Ok(());
     }
 
+    if args.sandbox.dry_run_json {
+        let prepared = prepare_sandbox(&args.sandbox, true)?;
+        return output::print_capabilities_json(
+            &prepared.caps,
+            shell_path.as_os_str(),
+            &[],
+            prepared.secrets.len(),
+        );
+    }
+
     let prepared = prepare_sandbox(&args.sandbox, silent)?;
 
     if prepared.allow_launch_services_active {
@@ -190,6 +200,16 @@ pub(crate) fn run_wrap(wrap_args: WrapArgs, silent: bool) -> Result<()> {
         }
         output::print_dry_run(&program, &cmd_args, silent);
         return Ok(());
+    }
+
+    if args.dry_run_json {
+        let prepared = prepare_sandbox(&args, true)?;
+        return output::print_capabilities_json(
+            &prepared.caps,
+            &program,
+            &cmd_args,
+            prepared.secrets.len(),
+        );
     }
 
     let prepared = prepare_sandbox(&args, silent)?;
