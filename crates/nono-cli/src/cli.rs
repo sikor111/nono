@@ -90,6 +90,13 @@ pub struct Cli {
     )]
     pub log_file: Option<PathBuf>,
 
+    /// Disable colored output. The `colored` crate already honors the
+    /// well-known `NO_COLOR` env var; this flag is the explicit CLI
+    /// override for tools / pipelines that want a deterministic
+    /// no-color output without touching the environment.
+    #[arg(long, global = true, help_heading = "OPTIONS")]
+    pub no_color: bool,
+
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -2508,6 +2515,23 @@ mod tests {
         } else {
             panic!("expected Inspect command");
         }
+    }
+
+    #[test]
+    fn no_color_is_global_and_defaults_to_false() {
+        let cli = Cli::try_parse_from(["nono", "ps"]).expect("parse");
+        assert!(!cli.no_color, "default is colors enabled (or auto-detect)");
+
+        // Flag should work both before AND after the subcommand because
+        // it is `global = true`. Verify the `after subcommand` form which
+        // is the more common shell muscle memory.
+        let cli = Cli::try_parse_from(["nono", "ps", "--no-color"]).expect("parse");
+        assert!(cli.no_color, "--no-color must propagate from subcommand");
+
+        // And before the subcommand (clap's "global=true" lets it travel
+        // either direction).
+        let cli = Cli::try_parse_from(["nono", "--no-color", "ps"]).expect("parse");
+        assert!(cli.no_color);
     }
 
     #[test]

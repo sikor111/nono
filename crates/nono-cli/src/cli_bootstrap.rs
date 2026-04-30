@@ -82,6 +82,14 @@ pub(crate) fn init_theme(cli: &Cli) {
         .and_then(|config| config.ui.theme);
 
     theme::init(cli.theme.as_deref(), config_theme.as_deref());
+
+    // Explicit `--no-color` overrides `colored`'s NO_COLOR/TTY detection
+    // both ways: if the user passes the flag, force colors off
+    // unconditionally. Without the flag we leave the auto-detection
+    // alone so terminal users still get colored badges.
+    if cli.no_color {
+        colored::control::set_override(false);
+    }
 }
 
 pub(crate) fn init_tracing(cli: &Cli) {
