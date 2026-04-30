@@ -138,6 +138,24 @@ fn should_apply_startup_timeout(
     recommended_profile.is_some() && cmd_args.is_empty()
 }
 
+/// Build the `BlockedCommand` `reason` text shown to the user, appending a
+/// hint that points at `nono why --command …` so they can inspect *which*
+/// policy rule blocked the command.
+///
+/// Includes `--profile <name>` only when one is in effect — without it
+/// `nono why` would resolve against the empty default policy and show the
+/// command as allowed, which would be misleading.
+fn blocked_command_reason_with_hint(blocked: &str, profile: Option<&str>) -> String {
+    let suggestion = match profile {
+        Some(name) => format!("nono why --command {blocked} --profile {name}"),
+        None => format!("nono why --command {blocked}"),
+    };
+    format!(
+        "{base}\n\nhint: run `{suggestion}` to inspect the policy that blocked this command.",
+        base = command_blocking_deprecation::BLOCKED_COMMAND_REASON,
+    )
+}
+
 pub(crate) fn execute_sandboxed(plan: LaunchPlan) -> Result<()> {
     let LaunchPlan {
         program,
@@ -154,9 +172,13 @@ pub(crate) fn execute_sandboxed(plan: LaunchPlan) -> Result<()> {
     if let Some(blocked) =
         config::check_blocked_command(&program, caps.allowed_commands(), caps.blocked_commands())?
     {
+        let reason = blocked_command_reason_with_hint(
+            &blocked,
+            flags.session.profile_name.as_deref(),
+        );
         return Err(NonoError::BlockedCommand {
             command: blocked,
-            reason: command_blocking_deprecation::BLOCKED_COMMAND_REASON.to_string(),
+            reason,
         });
     }
 
@@ -391,7 +413,8 @@ fn write_capability_state_file(
 #[cfg(test)]
 mod tests {
     use super::{
-        compute_executable_identity, recommended_builtin_profile, should_apply_startup_timeout,
+        blocked_command_reason_with_hint, compute_executable_identity, recommended_builtin_profile,
+        should_apply_startup_timeout,
     };
     use sha2::{Digest, Sha256};
     use std::fs;
@@ -439,5 +462,42 @@ mod tests {
             binary.canonicalize().expect("canonical")
         );
         assert_eq!(identity.sha256.as_bytes(), &<[u8; 32]>::from(expected));
+    }
+
+    #[test]
+    fn blocked_command_hint_includes_profile_when_present() {
+        let reason = blocked_command_reason_with_hint("rm", Some("default"));
+        assert!(
+            reason.contains("nono why --command rm --profile default"),
+            "hint must point at `nono why --command rm --profile default`, got: {reason}"
+        );
+        assert!(
+            reason.contains("hint:"),
+            "hint must be marked with `hint:` prefix"
+        );
+    }
+
+    #[test]
+    fn blocked_command_hint_omits_profile_when_absent() {
+        let reason = blocked_command_reason_with_hint("dd", None);
+        assert!(
+            reason.contains("nono why --command dd"),
+            "hint must reference the bare command query, got: {reason}"
+        );
+        assert!(
+            !reason.contains("--profile"),
+            "no `--profile` should be suggested when none is in effect: {reason}"
+        );
+    }
+
+    #[test]
+    fn blocked_command_hint_preserves_deprecation_reason() {
+        // The hint is appended to the existing deprecation explanation;
+        // we don't want to silently drop that context.
+        let reason = blocked_command_reason_with_hint("kill", Some("claude-code"));
+        assert!(
+            reason.contains("deprecated in v0.33.0"),
+            "deprecation note must remain visible to the user: {reason}"
+        );
     }
 }
