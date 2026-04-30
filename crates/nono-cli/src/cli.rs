@@ -1558,6 +1558,15 @@ pub struct WhyArgs {
           conflicts_with_all = &["host", "port", "path", "command_name"])]
     pub net: Option<String>,
 
+    /// Check whether a single TCP port is allowed under the resolved
+    /// per-port allowlist (Linux Landlock V4+ filters by port; macOS
+    /// Seatbelt tracks the same allowlists for parity). Reports which
+    /// list — `tcp_connect_ports`, `tcp_bind_ports`, or `localhost_ports`
+    /// — covers the port, or denies if network is blocked overall.
+    #[arg(long, value_name = "PORT", help_heading = "QUERY",
+          conflicts_with_all = &["host", "port", "path", "command_name", "net"])]
+    pub tcp: Option<u16>,
+
     /// Command name to check against the resolved policy's blocklist /
     /// allowlist (e.g. `nono why --command rm --profile claude`).
     #[arg(long = "command", value_name = "NAME", help_heading = "QUERY",

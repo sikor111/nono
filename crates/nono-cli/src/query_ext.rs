@@ -260,6 +260,69 @@ pub fn parse_host_port(input: &str, default_port: u16) -> Result<(String, u16)> 
     Ok((trimmed.to_string(), default_port))
 }
 
+/// Query whether a TCP port is allowed under the resolved per-port
+/// allowlists. Mirrors what Landlock V4+ enforces on Linux.
+///
+/// Resolution order (first hit wins):
+///   1. `localhost_ports` — bidirectional IPC pin (highest precedence).
+///   2. `tcp_connect_ports` — outbound allow.
+///   3. `tcp_bind_ports` — inbound bind allow.
+///   4. Otherwise: deny if network is blocked / proxy-only, allow if
+///      network is generally open.
+pub fn query_tcp_port(port: u16, caps: &CapabilitySet) -> QueryResult {
+    if caps.localhost_ports().contains(&port) {
+        return QueryResult::Allowed {
+            reason: "tcp_localhost_pinned".to_string(),
+            granted_path: None,
+            access: Some(format!("localhost-only IPC on port {port}")),
+            source: Some("policy:localhost_ports".to_string()),
+        };
+    }
+
+    if caps.tcp_connect_ports().contains(&port) {
+        return QueryResult::Allowed {
+            reason: "tcp_connect_allowed".to_string(),
+            granted_path: None,
+            access: Some(format!("outbound TCP connect on port {port}")),
+            source: Some("policy:tcp_connect_ports".to_string()),
+        };
+    }
+
+    if caps.tcp_bind_ports().contains(&port) {
+        return QueryResult::Allowed {
+            reason: "tcp_bind_allowed".to_string(),
+            granted_path: None,
+            access: Some(format!("local TCP bind on port {port}")),
+            source: Some("policy:tcp_bind_ports".to_string()),
+        };
+    }
+
+    if caps.is_network_blocked() {
+        QueryResult::Denied {
+            reason: "tcp_port_not_allowlisted".to_string(),
+            details: Some(format!(
+                "Port {port} is not in tcp_connect_ports, tcp_bind_ports, \
+                 or localhost_ports, and the resolved network mode blocks \
+                 unfiltered outbound. Add `--allow-port {port}` (bind), \
+                 `--allow-connect-port {port}` (connect), or relax with \
+                 `--allow-net` to permit the port."
+            )),
+            policy_source: None,
+            matching_capability: None,
+            suggested_flag: Some(format!("--allow-connect-port {port}")),
+        }
+    } else {
+        QueryResult::Allowed {
+            reason: "network_unrestricted".to_string(),
+            granted_path: None,
+            access: Some(format!(
+                "Network is not filtered by port — TCP port {port} is reachable"
+            )),
+            source: None,
+        }
+    }
+}
+
 /// Query whether running a command is permitted by the resolved policy.
 ///
 /// Mirrors the lookup performed at exec time: the explicit allow-list takes
@@ -700,6 +763,72 @@ mod tests {
     #[test]
     fn parse_host_port_rejects_empty_host_in_split() {
         assert!(parse_host_port(":443", 443).is_err());
+    }
+
+    #[test]
+    fn query_tcp_port_localhost_pin_takes_precedence() {
+        // localhost_ports applies regardless of network mode, so even
+        // with --block-net the port should resolve as allowed.
+        let caps = CapabilitySet::new()
+            .block_network()
+            .allow_localhost_port(8080);
+        match query_tcp_port(8080, &caps) {
+            QueryResult::Allowed { reason, source, .. } => {
+                assert_eq!(reason, "tcp_localhost_pinned");
+                assert_eq!(source.as_deref(), Some("policy:localhost_ports"));
+            }
+            other => panic!("expected allowed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn query_tcp_port_connect_list_attributed_correctly() {
+        let mut caps = CapabilitySet::new().block_network();
+        caps.add_tcp_connect_port(443);
+        match query_tcp_port(443, &caps) {
+            QueryResult::Allowed { reason, source, .. } => {
+                assert_eq!(reason, "tcp_connect_allowed");
+                assert_eq!(source.as_deref(), Some("policy:tcp_connect_ports"));
+            }
+            other => panic!("expected allowed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn query_tcp_port_blocked_network_with_no_allowlist_denies_with_hint() {
+        let caps = CapabilitySet::new().block_network();
+        match query_tcp_port(443, &caps) {
+            QueryResult::Denied {
+                reason,
+                suggested_flag,
+                ..
+            } => {
+                assert_eq!(reason, "tcp_port_not_allowlisted");
+                assert_eq!(
+                    suggested_flag.as_deref(),
+                    Some("--allow-connect-port 443"),
+                    "should hint at connect-port override"
+                );
+            }
+            other => panic!("expected denied, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn query_tcp_port_unfiltered_network_lets_any_port_through() {
+        // Default `CapabilitySet` is AllowAll on network — any port
+        // resolves as allowed without source attribution.
+        let caps = CapabilitySet::new();
+        match query_tcp_port(12345, &caps) {
+            QueryResult::Allowed { reason, source, .. } => {
+                assert_eq!(reason, "network_unrestricted");
+                assert!(
+                    source.is_none(),
+                    "no source attribution when network is unfiltered"
+                );
+            }
+            other => panic!("expected allowed, got {other:?}"),
+        }
     }
 
     #[test]

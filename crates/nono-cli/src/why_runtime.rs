@@ -103,11 +103,13 @@ pub(crate) fn run_why(args: WhyArgs) -> Result<()> {
         query_network(&host, port, &caps)
     } else if let Some(ref host) = args.host {
         query_network(host, args.port, &caps)
+    } else if let Some(port) = args.tcp {
+        query_ext::query_tcp_port(port, &caps)
     } else if let Some(ref command) = args.command_name {
         query_ext::query_command(command, &caps)?
     } else {
         return Err(NonoError::ConfigParse(
-            "--path, --host, --net or --command is required".to_string(),
+            "--path, --host, --net, --tcp or --command is required".to_string(),
         ));
     };
 
