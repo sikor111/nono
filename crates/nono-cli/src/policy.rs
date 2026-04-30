@@ -38,7 +38,6 @@ pub struct PolicyMeta {
 /// A named group of rules
 #[derive(Debug, Clone, Deserialize)]
 pub struct Group {
-    #[allow(dead_code)]
     pub description: String,
     /// If set, this group only applies on the specified platform
     #[serde(default)]
