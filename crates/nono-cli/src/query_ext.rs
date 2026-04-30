@@ -192,6 +192,74 @@ pub fn query_path(
     })
 }
 
+/// Parse a `host:port` shorthand for `nono why --net`.
+///
+/// Accepts:
+///   - `host:port` — literal split on the LAST colon (so `[::1]:443` works
+///     once we add v6 brackets later, but a bare `::1` would be ambiguous).
+///   - `[host]:port` — bracketed IPv6 form, port required.
+///   - `host` — port defaults to 443 to match `--port`'s default.
+///
+/// Rejects empty host, missing port, non-numeric port, port == 0.
+pub fn parse_host_port(input: &str, default_port: u16) -> Result<(String, u16)> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err(NonoError::ConfigParse(
+            "--net requires a non-empty host[:port]".to_string(),
+        ));
+    }
+
+    // Bracketed IPv6 form `[addr]:port` — port is mandatory here.
+    if let Some(rest) = trimmed.strip_prefix('[') {
+        if let Some((host, after)) = rest.split_once(']') {
+            if host.is_empty() {
+                return Err(NonoError::ConfigParse(
+                    "--net IPv6 host inside brackets is empty".to_string(),
+                ));
+            }
+            let port_part = after.strip_prefix(':').ok_or_else(|| {
+                NonoError::ConfigParse(format!(
+                    "--net bracketed IPv6 form requires a port: `[{host}]:<port>`",
+                ))
+            })?;
+            let port: u16 = port_part
+                .parse()
+                .map_err(|_| NonoError::ConfigParse(format!("--net invalid port `{port_part}`")))?;
+            if port == 0 {
+                return Err(NonoError::ConfigParse(
+                    "--net port must be in 1..=65535".to_string(),
+                ));
+            }
+            return Ok((host.to_string(), port));
+        }
+        return Err(NonoError::ConfigParse(
+            "--net unmatched `[` in IPv6 address".to_string(),
+        ));
+    }
+
+    // Plain `host:port` — split on the LAST colon so v4-mapped or future
+    // patterns survive without ambiguity for the common case.
+    if let Some((host, port_part)) = trimmed.rsplit_once(':') {
+        if host.is_empty() {
+            return Err(NonoError::ConfigParse(
+                "--net host portion is empty".to_string(),
+            ));
+        }
+        let port: u16 = port_part
+            .parse()
+            .map_err(|_| NonoError::ConfigParse(format!("--net invalid port `{port_part}`")))?;
+        if port == 0 {
+            return Err(NonoError::ConfigParse(
+                "--net port must be in 1..=65535".to_string(),
+            ));
+        }
+        return Ok((host.to_string(), port));
+    }
+
+    // Bare host — fall back to the caller's default port.
+    Ok((trimmed.to_string(), default_port))
+}
+
 /// Query whether running a command is permitted by the resolved policy.
 ///
 /// Mirrors the lookup performed at exec time: the explicit allow-list takes
@@ -588,6 +656,56 @@ mod tests {
             }
             other => panic!("expected allowed, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn parse_host_port_accepts_plain_host_port() {
+        let (host, port) = parse_host_port("api.openai.com:443", 8080).expect("parse");
+        assert_eq!(host, "api.openai.com");
+        assert_eq!(port, 443);
+    }
+
+    #[test]
+    fn parse_host_port_falls_back_to_default_when_port_omitted() {
+        let (host, port) = parse_host_port("example.com", 1234).expect("parse");
+        assert_eq!(host, "example.com");
+        assert_eq!(port, 1234, "no `:` in input ⇒ default port");
+    }
+
+    #[test]
+    fn parse_host_port_handles_bracketed_ipv6() {
+        let (host, port) = parse_host_port("[::1]:8080", 0).expect("parse");
+        assert_eq!(host, "::1");
+        assert_eq!(port, 8080);
+    }
+
+    #[test]
+    fn parse_host_port_rejects_empty_input() {
+        assert!(parse_host_port("", 443).is_err());
+        assert!(parse_host_port("   ", 443).is_err());
+    }
+
+    #[test]
+    fn parse_host_port_rejects_non_numeric_port() {
+        assert!(parse_host_port("example.com:abc", 443).is_err());
+    }
+
+    #[test]
+    fn parse_host_port_rejects_zero_port() {
+        // Port 0 is meaningful in a few syscalls but never a valid query
+        // target — surface it as an error to avoid silent confusion.
+        assert!(parse_host_port("example.com:0", 443).is_err());
+    }
+
+    #[test]
+    fn parse_host_port_rejects_empty_host_in_split() {
+        assert!(parse_host_port(":443", 443).is_err());
+    }
+
+    #[test]
+    fn parse_host_port_rejects_bracketed_form_without_port() {
+        assert!(parse_host_port("[::1]", 443).is_err());
+        assert!(parse_host_port("[::1]:", 443).is_err());
     }
 
     #[test]

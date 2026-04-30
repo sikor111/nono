@@ -1550,10 +1550,18 @@ pub struct WhyArgs {
     #[arg(long, default_value = "443", help_heading = "QUERY")]
     pub port: u16,
 
+    /// Combined `host:port` shorthand for network queries (alternative to
+    /// `--host` + `--port`). Useful when the address comes from a URL or
+    /// config file that already has `host:port` formatted, e.g.
+    /// `nono why --net api.openai.com:443 --profile claude-code`.
+    #[arg(long, value_name = "HOST:PORT", help_heading = "QUERY",
+          conflicts_with_all = &["host", "port", "path", "command_name"])]
+    pub net: Option<String>,
+
     /// Command name to check against the resolved policy's blocklist /
     /// allowlist (e.g. `nono why --command rm --profile claude`).
     #[arg(long = "command", value_name = "NAME", help_heading = "QUERY",
-          conflicts_with_all = &["path", "host"])]
+          conflicts_with_all = &["path", "host", "net"])]
     pub command_name: Option<String>,
 
     /// Output JSON instead of human-readable format
