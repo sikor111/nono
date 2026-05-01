@@ -485,6 +485,33 @@ fn ps_matches(s: &SessionRecord, args: &PsArgs, since_threshold: Option<u64>) ->
         }
     }
 
+    if let Some(keyword) = args.search.as_deref() {
+        let needle = keyword.to_lowercase();
+        // Search across session_id, name, profile, and the joined
+        // program argv. Any single match is enough — this is a
+        // discovery flag, not a strict filter (the field-specific
+        // flags handle that). Fields that are absent on this
+        // record (e.g. unnamed session) simply don't contribute.
+        let id_hit = s.session_id.to_lowercase().contains(&needle);
+        let name_hit = s
+            .name
+            .as_deref()
+            .map(|n| n.to_lowercase().contains(&needle))
+            .unwrap_or(false);
+        let profile_hit = s
+            .profile
+            .as_deref()
+            .map(|p| p.to_lowercase().contains(&needle))
+            .unwrap_or(false);
+        let command_hit = s
+            .command
+            .iter()
+            .any(|arg| arg.to_lowercase().contains(&needle));
+        if !(id_hit || name_hit || profile_hit || command_hit) {
+            return false;
+        }
+    }
+
     true
 }
 
@@ -691,6 +718,7 @@ fn empty_filter_message(args: &PsArgs) -> &'static str {
         || args.status.is_some()
         || args.exit_code.is_some()
         || args.since.is_some()
+        || args.search.is_some()
     {
         "No sessions match the requested filters."
     } else if args.all {
@@ -1500,7 +1528,68 @@ mod tests {
             max_iterations: None,
             quiet: false,
             ids_only: false,
+            search: None,
         }
+    }
+
+    #[test]
+    fn ps_search_matches_across_id_name_profile_and_command() {
+        // One record per match path. Each search term must hit
+        // exactly one record so we can verify which field the
+        // matcher actually consults.
+        let mut by_id = make_record("rust12345", None, None, SessionStatus::Running);
+        by_id.command = vec!["sh".to_string()];
+        let mut by_name = make_record("aaaa", Some("rust-build"), None, SessionStatus::Running);
+        by_name.command = vec!["sh".to_string()];
+        let mut by_profile = make_record("bbbb", None, Some("rust-dev"), SessionStatus::Running);
+        by_profile.command = vec!["sh".to_string()];
+        let mut by_command = make_record("cccc", None, None, SessionStatus::Running);
+        by_command.command = vec!["cargo".to_string(), "build".to_string()];
+        let mut no_match = make_record("dddd", Some("python"), None, SessionStatus::Running);
+        no_match.command = vec!["python3".to_string()];
+
+        let args_rust = PsArgs {
+            search: Some("rust".to_string()),
+            ..ps_args()
+        };
+        // ID, name, profile all carry "rust" in different records.
+        assert!(ps_matches(&by_id, &args_rust, None));
+        assert!(ps_matches(&by_name, &args_rust, None));
+        assert!(ps_matches(&by_profile, &args_rust, None));
+        // Command "cargo build" doesn't contain "rust".
+        assert!(!ps_matches(&by_command, &args_rust, None));
+        assert!(!ps_matches(&no_match, &args_rust, None));
+
+        // Case-insensitive: "CARGO" matches "cargo" in argv.
+        let args_cargo = PsArgs {
+            search: Some("CARGO".to_string()),
+            ..ps_args()
+        };
+        assert!(ps_matches(&by_command, &args_cargo, None));
+        assert!(!ps_matches(&by_id, &args_cargo, None));
+    }
+
+    #[test]
+    fn ps_search_composes_with_other_filters_as_and() {
+        // search alone matches a record by command; combining with
+        // --status running which the record satisfies → still
+        // passes. Add --profile that record does NOT have →
+        // blocked. Confirms search is intersected with the rest,
+        // not OR'd.
+        let mut rec = make_record("xx", None, Some("rust-dev"), SessionStatus::Running);
+        rec.command = vec!["cargo".to_string()];
+        let with_search = PsArgs {
+            search: Some("cargo".to_string()),
+            status: Some(crate::cli::PsStatusFilter::Running),
+            ..ps_args()
+        };
+        assert!(ps_matches(&rec, &with_search, None));
+        let with_search_and_wrong_profile = PsArgs {
+            search: Some("cargo".to_string()),
+            profile: Some("python-dev".to_string()),
+            ..ps_args()
+        };
+        assert!(!ps_matches(&rec, &with_search_and_wrong_profile, None));
     }
 
     #[test]

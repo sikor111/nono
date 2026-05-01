@@ -2438,6 +2438,19 @@ pub struct PsArgs {
     #[arg(long, value_name = "DURATION")]
     pub since: Option<String>,
 
+    /// Filter sessions to those whose session_id, name, profile, or
+    /// command (any argv element) contains KEYWORD as a case-insensitive
+    /// substring. Useful when the field-specific filters (`--name`
+    /// / `--profile`) are too narrow and you don't know which one
+    /// would match — e.g. `nono ps --search rust` finds every
+    /// session related to Rust regardless of whether "rust"
+    /// appears in the profile name, the session name, or the
+    /// command line. Composes (AND) with all other filters and
+    /// with `--all`. Fourth `--search` surface, symmetric to the
+    /// three `profile` `--search` flags.
+    #[arg(long, value_name = "KEYWORD")]
+    pub search: Option<String>,
+
     /// Sort the table by started time, name, status, or profile.
     /// Default sort is `started` (newest first), matching prior behavior.
     #[arg(long, value_enum, value_name = "KEY")]
@@ -4606,6 +4619,38 @@ mod tests {
             "/tmp/foo.json",
         ]);
         assert!(with_both.is_err(), "--field + --output must conflict");
+    }
+
+    #[test]
+    fn ps_search_parses_and_composes_with_other_filters() {
+        // --search is a discovery filter that intersects (AND)
+        // with the field-specific ones; clap should accept it
+        // alongside every existing filter without complaint.
+        let bare = Cli::try_parse_from(["nono", "ps", "--search", "rust"]).expect("--search alone");
+        if let Commands::Ps(args) = bare.command {
+            assert_eq!(args.search.as_deref(), Some("rust"));
+        } else {
+            panic!("expected Ps");
+        }
+
+        let combo = Cli::try_parse_from([
+            "nono",
+            "ps",
+            "--search",
+            "rust",
+            "--all",
+            "--status",
+            "running",
+            "--profile",
+            "rust-dev",
+        ])
+        .expect("--search composes with --all/--status/--profile");
+        if let Commands::Ps(args) = combo.command {
+            assert_eq!(args.search.as_deref(), Some("rust"));
+            assert!(args.all);
+        } else {
+            panic!("expected Ps");
+        }
     }
 
     #[test]
