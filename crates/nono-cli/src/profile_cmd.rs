@@ -1475,6 +1475,43 @@ fn profile_to_json(
 // ---------------------------------------------------------------------------
 
 pub(crate) fn cmd_diff(args: ProfileDiffArgs) -> Result<()> {
+    // `--watch` polls both profiles repeatedly so users can edit
+    // one and watch the diff refresh. Conflicts with json/compact/
+    // field/quiet at the clap layer, so reaching this branch only
+    // ever runs the human-readable diff.
+    if let Some(spec) = args.watch.as_deref() {
+        let interval = crate::session_commands::parse_duration_to_secs(spec)?;
+        let dur = std::time::Duration::from_secs(interval);
+        let mut iterations_remaining: Option<u64> = args.max_iterations;
+        loop {
+            print!("\x1b[2J\x1b[H");
+            std::io::Write::flush(&mut std::io::stdout()).ok();
+            println!(
+                "nono profile diff {} {}  -  refreshed {}  (every {}s)",
+                &args.profile1,
+                &args.profile2,
+                chrono::Local::now().format("%H:%M:%S"),
+                interval,
+            );
+            println!();
+            // Recurse with watch cleared so the existing diff
+            // body runs end-to-end. load_profile_no_migrate
+            // re-reads from disk on each call.
+            let mut once = args.clone();
+            once.watch = None;
+            once.max_iterations = None;
+            cmd_diff(once)?;
+
+            if let Some(ref mut remaining) = iterations_remaining {
+                *remaining = remaining.saturating_sub(1);
+                if *remaining == 0 {
+                    return Ok(());
+                }
+            }
+            std::thread::sleep(dur);
+        }
+    }
+
     let p1 = profile::load_profile_no_migrate(&args.profile1)?;
     let p2 = profile::load_profile_no_migrate(&args.profile2)?;
 

@@ -918,7 +918,7 @@ pub enum ProfileShowFormat {
     Manifest,
 }
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 pub struct ProfileDiffArgs {
     /// First profile name or path
     pub profile1: String,
@@ -946,6 +946,23 @@ pub struct ProfileDiffArgs {
     /// (`--json` / `--compact` / `--field`).
     #[arg(long, conflicts_with_all = &["json", "compact", "field"])]
     pub quiet: bool,
+    /// Refresh the diff every DURATION (e.g. `2s`, `5s`, `1m`) —
+    /// top-like polling. Useful for live drift detection while
+    /// editing one of the two profiles. Each tick re-reads both
+    /// profiles from disk via `load_profile_no_migrate`. Conflicts
+    /// with the structured-output / single-shot modes (`--json`
+    /// / `--compact` / `--field` / `--quiet`).
+    #[arg(
+        long,
+        value_name = "DURATION",
+        conflicts_with_all = &["json", "compact", "field", "quiet"],
+    )]
+    pub watch: Option<String>,
+    /// Cap `--watch` at N frames before exiting. Symmetric to
+    /// `nono inspect --max-iterations`. Requires `--watch`; has
+    /// no effect on a single-shot diff.
+    #[arg(long, value_name = "N", requires = "watch")]
+    pub max_iterations: Option<u64>,
 }
 
 #[derive(Parser, Debug)]
@@ -3550,6 +3567,78 @@ mod tests {
             }
         } else {
             panic!("expected Profile");
+        }
+    }
+
+    #[test]
+    fn profile_diff_watch_parses_and_conflicts_with_structured_output_modes() {
+        let bare = Cli::try_parse_from(["nono", "profile", "diff", "a", "b", "--watch", "5s"])
+            .expect("--watch parses");
+        if let Commands::Profile(args) = bare.command {
+            if let crate::cli::ProfileCommands::Diff(d) = args.command {
+                assert_eq!(d.watch.as_deref(), Some("5s"));
+                assert!(d.max_iterations.is_none());
+            } else {
+                panic!("expected Profile::Diff");
+            }
+        } else {
+            panic!("expected Profile");
+        }
+
+        let with_cap = Cli::try_parse_from([
+            "nono",
+            "profile",
+            "diff",
+            "a",
+            "b",
+            "--watch",
+            "1s",
+            "--max-iterations",
+            "3",
+        ])
+        .expect("watch + max-iterations parses");
+        if let Commands::Profile(args) = with_cap.command {
+            if let crate::cli::ProfileCommands::Diff(d) = args.command {
+                assert_eq!(d.max_iterations, Some(3));
+            } else {
+                panic!("expected Profile::Diff");
+            }
+        } else {
+            panic!("expected Profile");
+        }
+
+        // --max-iterations alone fails.
+        let bare_max =
+            Cli::try_parse_from(["nono", "profile", "diff", "a", "b", "--max-iterations", "5"]);
+        assert!(bare_max.is_err(), "--max-iterations requires --watch");
+
+        for invocation in [
+            vec![
+                "nono", "profile", "diff", "a", "b", "--watch", "1s", "--json",
+            ],
+            vec![
+                "nono",
+                "profile",
+                "diff",
+                "a",
+                "b",
+                "--watch",
+                "1s",
+                "--json",
+                "--compact",
+            ],
+            vec![
+                "nono", "profile", "diff", "a", "b", "--watch", "1s", "--json", "--field", "groups",
+            ],
+            vec![
+                "nono", "profile", "diff", "a", "b", "--watch", "1s", "--quiet",
+            ],
+        ] {
+            assert!(
+                Cli::try_parse_from(&invocation).is_err(),
+                "{:?}: --watch + structured-output flag must be rejected",
+                invocation
+            );
         }
     }
 
