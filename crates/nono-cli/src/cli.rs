@@ -817,6 +817,13 @@ pub struct ProfileListArgs {
     /// without `--json`. Mirrors `profile show --compact` etc.
     #[arg(long, requires = "json")]
     pub compact: bool,
+    /// Extract a single field from the JSON array instead of emitting
+    /// the whole document — same `jq -r`-lite semantics as
+    /// `nono profile show --field`. The list output is an array, so
+    /// JSON Pointer paths reach individual entries (e.g. `/0/name`,
+    /// `/0/source`). Requires `--json`.
+    #[arg(long, value_name = "PATH", requires = "json")]
+    pub field: Option<String>,
 }
 
 #[derive(Parser, Debug)]
@@ -2917,6 +2924,25 @@ mod tests {
             assert_eq!(args.field.as_deref(), Some("/session/name"));
         } else {
             panic!("expected Inspect");
+        }
+    }
+
+    #[test]
+    fn profile_list_field_requires_json_and_parses_path_forms() {
+        let bare = Cli::try_parse_from(["nono", "profile", "list", "--field", "name"]);
+        assert!(bare.is_err(), "--field without --json must fail to parse");
+
+        let with_json =
+            Cli::try_parse_from(["nono", "profile", "list", "--json", "--field", "/0/name"])
+                .expect("pointer path parses");
+        if let Commands::Profile(args) = with_json.command {
+            if let crate::cli::ProfileCommands::List(l) = args.command {
+                assert_eq!(l.field.as_deref(), Some("/0/name"));
+            } else {
+                panic!("expected Profile::List");
+            }
+        } else {
+            panic!("expected Profile");
         }
     }
 

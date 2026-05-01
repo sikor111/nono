@@ -766,6 +766,14 @@ pub(crate) fn cmd_list(args: ProfileListArgs) -> Result<()> {
             .chain(user_profiles.iter().map(|(n, p)| format_entry(n, p)))
             .collect();
         let val = serde_json::Value::Array(arr);
+        if let Some(ref field) = args.field {
+            // Same shell-friendly extraction as `profile show --field`.
+            // For the array shape, JSON Pointer paths like `/0/name`
+            // reach individual entries.
+            let extracted = crate::field_extract::extract_field_output(&val, field, args.compact)?;
+            println!("{extracted}");
+            return Ok(());
+        }
         let rendered = if args.compact {
             to_json_compact(&val)?
         } else {
