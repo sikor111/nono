@@ -843,6 +843,14 @@ pub struct ProfileDiffArgs {
     /// without `--json`.
     #[arg(long, requires = "json")]
     pub compact: bool,
+    /// Extract a single field from the diff JSON output instead of
+    /// emitting the whole document — symmetric to
+    /// `nono profile show --field`. Useful for `if [ "$(nono profile
+    /// diff a b --json --field /security/groups/added | jq length)" -gt 0 ]`
+    /// style guards. Accepts a top-level key or a JSON Pointer path.
+    /// Requires `--json`.
+    #[arg(long, value_name = "PATH", requires = "json")]
+    pub field: Option<String>,
 }
 
 #[derive(Parser, Debug)]
@@ -2763,6 +2771,44 @@ mod tests {
                 assert!(show.compact);
             } else {
                 panic!("expected Profile::Show");
+            }
+        } else {
+            panic!("expected Profile");
+        }
+    }
+
+    #[test]
+    fn profile_diff_field_requires_json_and_parses_path_forms() {
+        // Symmetric guard with `show --field`: clap rejects the
+        // human-readable form because there's no JSON document to
+        // navigate.
+        let bare = Cli::try_parse_from([
+            "nono",
+            "profile",
+            "diff",
+            "default",
+            "claude-code",
+            "--field",
+            "groups",
+        ]);
+        assert!(bare.is_err(), "--field without --json must fail to parse");
+
+        let with_json = Cli::try_parse_from([
+            "nono",
+            "profile",
+            "diff",
+            "default",
+            "claude-code",
+            "--json",
+            "--field",
+            "/groups/added",
+        ])
+        .expect("pointer path parses");
+        if let Commands::Profile(args) = with_json.command {
+            if let crate::cli::ProfileCommands::Diff(diff) = args.command {
+                assert_eq!(diff.field.as_deref(), Some("/groups/added"));
+            } else {
+                panic!("expected Profile::Diff");
             }
         } else {
             panic!("expected Profile");

@@ -1313,6 +1313,15 @@ pub(crate) fn cmd_diff(args: ProfileDiffArgs) -> Result<()> {
 
     if args.json {
         let val = diff_to_json(&args.profile1, &args.profile2, &p1, &p2);
+        if let Some(ref field) = args.field {
+            // Same shell-friendly extraction as `show --field` —
+            // typo'd paths surface as a `ProfileParse` error rather
+            // than empty output. See `extract_field_output` for
+            // the jq-r semantics.
+            let extracted = extract_field_output(&val, field, args.compact)?;
+            println!("{extracted}");
+            return Ok(());
+        }
         let rendered = if args.compact {
             to_json_compact(&val)?
         } else {
