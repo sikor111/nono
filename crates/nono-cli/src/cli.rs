@@ -2447,6 +2447,17 @@ pub struct PruneArgs {
     /// effect without `--json`.
     #[arg(long, requires = "json")]
     pub compact: bool,
+
+    /// Extract a single field from the JSON output instead of
+    /// emitting the whole document — same `jq -r`-lite semantics
+    /// as the other `--field` surfaces. Top-level keys for the
+    /// summary view (`action`, `count`); JSON Pointer paths into
+    /// the sessions array (e.g. `/sessions/0/session_id`) for
+    /// individual entries. Common shell-friendly use:
+    /// `count=$(nono prune --dry-run --json --field count)`.
+    /// Requires `--json`.
+    #[arg(long, value_name = "PATH", requires = "json")]
+    pub field: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -3382,6 +3393,29 @@ mod tests {
         // Invalid value: clap's value_enum rejects at parse time, no
         // chance for a typo to silently fall back to a default.
         assert!(Cli::try_parse_from(["nono", "ps", "--header-format", "bogus"]).is_err());
+    }
+
+    #[test]
+    fn prune_field_requires_json_and_parses_path_forms() {
+        // Same shell-friendly extraction as the other --field
+        // surfaces. --field needs --json since the human-readable
+        // progress lines have no JSON document to navigate.
+        let bare = Cli::try_parse_from(["nono", "prune", "--field", "count"]);
+        assert!(bare.is_err(), "--field without --json must fail to parse");
+
+        let with_json = Cli::try_parse_from([
+            "nono",
+            "prune",
+            "--json",
+            "--field",
+            "/sessions/0/session_id",
+        ])
+        .expect("pointer path parses");
+        if let Commands::Prune(args) = with_json.command {
+            assert_eq!(args.field.as_deref(), Some("/sessions/0/session_id"));
+        } else {
+            panic!("expected Prune");
+        }
     }
 
     #[test]

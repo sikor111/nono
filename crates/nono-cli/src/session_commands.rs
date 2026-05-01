@@ -1041,6 +1041,12 @@ pub fn run_prune(args: &PruneArgs) -> Result<()> {
                 "count": 0,
                 "sessions": [],
             });
+            if let Some(ref field) = args.field {
+                let extracted =
+                    crate::field_extract::extract_field_output(&value, field, args.compact)?;
+                println!("{extracted}");
+                return Ok(());
+            }
             let json = if args.compact {
                 serde_json::to_string(&value)
             } else {
@@ -1140,6 +1146,12 @@ pub fn run_prune(args: &PruneArgs) -> Result<()> {
             "count": to_remove.len(),
             "sessions": entries,
         });
+        if let Some(ref field) = args.field {
+            let extracted =
+                crate::field_extract::extract_field_output(&value, field, args.compact)?;
+            println!("{extracted}");
+            return Ok(());
+        }
         let json = if args.compact {
             serde_json::to_string(&value)
         } else {
