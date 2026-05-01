@@ -281,6 +281,17 @@ fn print_ps_table_once(args: &PsArgs) -> Result<()> {
         std::process::exit(if filtered.is_empty() { 1 } else { 0 });
     }
 
+    if args.ids_only {
+        // Symmetric to `profile list --names-only`: emit just the
+        // primary identifier (session_id) one per line, in the
+        // resolved filter+sort+reverse order. Empty set is fine —
+        // the loop just produces no output.
+        for s in &filtered {
+            println!("{}", s.session_id);
+        }
+        return Ok(());
+    }
+
     if args.json {
         if let Some(ref field) = args.field {
             // `--field` short-circuits the full-document render. The
@@ -1379,6 +1390,7 @@ mod tests {
             field: None,
             max_iterations: None,
             quiet: false,
+            ids_only: false,
         }
     }
 

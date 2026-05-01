@@ -2401,6 +2401,20 @@ pub struct PsArgs {
         conflicts_with_all = &["json", "compact", "output", "field", "watch"],
     )]
     pub quiet: bool,
+
+    /// Emit just the session_id values, one per line, after the
+    /// resolved filter / sort / reverse pipeline. Friendlier than
+    /// `--field /N/session_id` for shell loops over matches:
+    /// `for sid in $(nono ps --status exited --ids-only); do
+    /// nono inspect "$sid" --quiet; done`. Conflicts with
+    /// output-emitting flags (`--json` / `--compact` / `--output`
+    /// / `--field`) and with `--watch` / `--quiet` (different
+    /// output modes).
+    #[arg(
+        long,
+        conflicts_with_all = &["json", "compact", "output", "field", "watch", "quiet"],
+    )]
+    pub ids_only: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -3790,6 +3804,31 @@ mod tests {
             "/tmp/foo.json",
         ]);
         assert!(with_both.is_err(), "--field + --output must conflict");
+    }
+
+    #[test]
+    fn ps_ids_only_parses_and_conflicts_with_output_modes() {
+        let bare = Cli::try_parse_from(["nono", "ps", "--ids-only"]).expect("parses");
+        if let Commands::Ps(args) = bare.command {
+            assert!(args.ids_only);
+        } else {
+            panic!("expected Ps");
+        }
+
+        for invocation in [
+            vec!["nono", "ps", "--ids-only", "--json"],
+            vec!["nono", "ps", "--ids-only", "--json", "--compact"],
+            vec!["nono", "ps", "--ids-only", "--output", "csv"],
+            vec!["nono", "ps", "--ids-only", "--json", "--field", "/0/name"],
+            vec!["nono", "ps", "--ids-only", "--watch", "1s"],
+            vec!["nono", "ps", "--ids-only", "--quiet"],
+        ] {
+            assert!(
+                Cli::try_parse_from(&invocation).is_err(),
+                "{:?}: --ids-only + output flag must be rejected",
+                invocation
+            );
+        }
     }
 
     #[test]
