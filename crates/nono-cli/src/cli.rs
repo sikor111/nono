@@ -2543,6 +2543,28 @@ pub struct InspectArgs {
     /// `--field` / `--events` / `--quiet`).
     #[arg(long, conflicts_with_all = &["json", "compact", "field", "events", "quiet"])]
     pub raw: bool,
+
+    /// Refresh the inspect output every DURATION (e.g. `2s`,
+    /// `5s`, `1m`) — top-like polling for a single session.
+    /// Useful for tracking a still-running session in real time
+    /// without re-running the command. Pairs with `--events` to
+    /// also refresh the event log. Exit with Ctrl-C. Conflicts
+    /// with the single-shot structured-output modes (`--json` /
+    /// `--compact` / `--field` / `--quiet` / `--raw`).
+    #[arg(
+        long,
+        value_name = "DURATION",
+        conflicts_with_all = &["json", "compact", "field", "quiet", "raw"],
+    )]
+    pub watch: Option<String>,
+
+    /// Cap `--watch` at N frames before exiting. Symmetric to
+    /// `nono ps --max-iterations`: useful for CI smoke tests of
+    /// watch mode (don't hang forever) and for capturing fixed-
+    /// size samples without manual Ctrl-C. Requires `--watch`;
+    /// has no effect on a single-shot inspect.
+    #[arg(long, value_name = "N", requires = "watch")]
+    pub max_iterations: Option<u64>,
 }
 
 #[derive(Parser, Debug)]
@@ -3139,6 +3161,63 @@ mod tests {
             assert_eq!(args.field.as_deref(), Some("/result/reason"));
         } else {
             panic!("expected Why");
+        }
+    }
+
+    #[test]
+    fn inspect_watch_parses_and_conflicts_with_structured_output_modes() {
+        let bare = Cli::try_parse_from(["nono", "inspect", "abc123", "--watch", "5s"])
+            .expect("--watch parses");
+        if let Commands::Inspect(args) = bare.command {
+            assert_eq!(args.watch.as_deref(), Some("5s"));
+            assert!(args.max_iterations.is_none());
+        } else {
+            panic!("expected Inspect");
+        }
+
+        let with_cap = Cli::try_parse_from([
+            "nono",
+            "inspect",
+            "abc123",
+            "--watch",
+            "1s",
+            "--max-iterations",
+            "3",
+        ])
+        .expect("--watch + --max-iterations parses");
+        if let Commands::Inspect(args) = with_cap.command {
+            assert_eq!(args.max_iterations, Some(3));
+        } else {
+            panic!("expected Inspect");
+        }
+
+        // --max-iterations without --watch is meaningless (single-
+        // shot inspect doesn't loop) — clap rejects.
+        let bare_max = Cli::try_parse_from(["nono", "inspect", "abc123", "--max-iterations", "5"]);
+        assert!(bare_max.is_err(), "--max-iterations requires --watch");
+
+        for invocation in [
+            vec!["nono", "inspect", "abc123", "--watch", "1s", "--json"],
+            vec![
+                "nono",
+                "inspect",
+                "abc123",
+                "--watch",
+                "1s",
+                "--json",
+                "--compact",
+            ],
+            vec![
+                "nono", "inspect", "abc123", "--watch", "1s", "--json", "--field", "status",
+            ],
+            vec!["nono", "inspect", "abc123", "--watch", "1s", "--quiet"],
+            vec!["nono", "inspect", "abc123", "--watch", "1s", "--raw"],
+        ] {
+            assert!(
+                Cli::try_parse_from(&invocation).is_err(),
+                "{:?}: --watch + structured-output flag must be rejected",
+                invocation
+            );
         }
     }
 

@@ -882,6 +882,45 @@ pub fn run_inspect(args: &InspectArgs) -> Result<()> {
         std::process::exit(0);
     }
 
+    // `--watch` polls the same session repeatedly. Re-load on
+    // each iteration so the rendered fields (status, attachment,
+    // exit_code, event-log tail) update as the underlying
+    // session evolves. Conflicts with json/compact/field/raw at
+    // the clap layer, so reaching this branch implies the
+    // human-readable render path.
+    if let Some(spec) = args.watch.as_deref() {
+        let interval = parse_duration_to_secs(spec)?;
+        let dur = std::time::Duration::from_secs(interval);
+        let mut iterations_remaining: Option<u64> = args.max_iterations;
+        loop {
+            // Same ANSI clear-screen convention as `ps --watch`.
+            print!("\x1b[2J\x1b[H");
+            std::io::Write::flush(&mut std::io::stdout()).ok();
+            println!(
+                "nono inspect {}  -  refreshed {}  (every {}s)",
+                &args.session,
+                chrono::Local::now().format("%H:%M:%S"),
+                interval,
+            );
+            println!();
+            // Re-load fresh on each tick so the user sees the
+            // session's evolving state. If the session is
+            // deleted under us, the load_session error
+            // propagates and ends the watch loop.
+            let fresh_record = session::load_session(&args.session)?;
+            print_inspect_record_human(args, &fresh_record)?;
+
+            if let Some(ref mut remaining) = iterations_remaining {
+                *remaining = remaining.saturating_sub(1);
+                if *remaining == 0 {
+                    return Ok(());
+                }
+            }
+
+            std::thread::sleep(dur);
+        }
+    }
+
     // Resolve the on-disk path of the session record once. Surfacing it
     // alongside the JSON makes "where can I `cat` this?" answerable
     // without the user re-deriving the path from the session_id.
@@ -976,6 +1015,29 @@ pub fn run_inspect(args: &InspectArgs) -> Result<()> {
         println!("{json}");
         return Ok(());
     }
+
+    print_inspect_record_human(args, &record)
+}
+
+/// Render the human-readable inspect block for one session
+/// record. Factored out so the `--watch` loop can call it on
+/// each refresh without duplicating the layout. The
+/// `session_file` path and the event log are recomputed
+/// per-call — both can change between watch ticks (the file
+/// gets atomically replaced on state updates; new events keep
+/// appending).
+fn print_inspect_record_human(args: &InspectArgs, record: &SessionRecord) -> Result<()> {
+    let session_file = session::session_file_path(&record.session_id)?;
+    let event_lines: Option<Vec<String>> = if args.events {
+        let events_path = session::session_events_path(&record.session_id)?;
+        if events_path.exists() {
+            Some(read_event_log_lines(&events_path, args.logs_tail)?)
+        } else {
+            Some(Vec::new())
+        }
+    } else {
+        None
+    };
 
     println!("Session:    {}", record.session_id);
     if let Some(ref name) = record.name {
