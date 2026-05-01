@@ -819,6 +819,25 @@ pub(crate) fn cmd_list(args: ProfileListArgs) -> Result<()> {
         }
     }
 
+    if args.names_only {
+        // Newline-delimited names, in the same order the JSON
+        // mode emits them: built-in → packs → user. Profiles
+        // that fail to load still get listed by name (the failure
+        // doesn't change identity); the JSON / human paths
+        // surface the error inline, but `--names-only` is for
+        // discovery, not diagnostics.
+        for (name, _) in &builtin_profiles {
+            println!("{name}");
+        }
+        for (name, _, _) in &pack_entries {
+            println!("{name}");
+        }
+        for (name, _) in &user_profiles {
+            println!("{name}");
+        }
+        return Ok(());
+    }
+
     if args.json {
         let format_entry = |name: &str, result: &Result<Profile>| {
             let source = profile_source(name);

@@ -855,6 +855,14 @@ pub struct ProfileListArgs {
     /// `/0/source`). Requires `--json`.
     #[arg(long, value_name = "PATH", requires = "json")]
     pub field: Option<String>,
+
+    /// Emit only the profile names, one per line. Friendlier than
+    /// `--field /N/name` (which only gets a single index) for
+    /// shell loops: `for p in $(nono profile list --names-only);
+    /// do …; done`. Conflicts with `--json` / `--compact` /
+    /// `--field` (different output shape).
+    #[arg(long, conflicts_with_all = &["json", "compact", "field"])]
+    pub names_only: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -3239,6 +3247,49 @@ mod tests {
             }
         } else {
             panic!("expected Profile");
+        }
+    }
+
+    #[test]
+    fn profile_list_names_only_parses_and_conflicts_with_output_modes() {
+        let bare = Cli::try_parse_from(["nono", "profile", "list", "--names-only"])
+            .expect("--names-only alone parses");
+        if let Commands::Profile(args) = bare.command {
+            if let crate::cli::ProfileCommands::List(l) = args.command {
+                assert!(l.names_only);
+                assert!(!l.json);
+            } else {
+                panic!("expected Profile::List");
+            }
+        } else {
+            panic!("expected Profile");
+        }
+
+        for invocation in [
+            vec!["nono", "profile", "list", "--names-only", "--json"],
+            vec![
+                "nono",
+                "profile",
+                "list",
+                "--names-only",
+                "--json",
+                "--compact",
+            ],
+            vec![
+                "nono",
+                "profile",
+                "list",
+                "--names-only",
+                "--json",
+                "--field",
+                "/0/name",
+            ],
+        ] {
+            assert!(
+                Cli::try_parse_from(&invocation).is_err(),
+                "{:?}: --names-only + output flag must be rejected",
+                invocation
+            );
         }
     }
 
