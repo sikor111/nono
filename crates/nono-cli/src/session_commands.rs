@@ -706,6 +706,17 @@ pub fn run_prune(args: &PruneArgs) -> Result<()> {
     reject_if_sandboxed("prune")?;
     let sessions = session::list_sessions()?;
 
+    // Resolve the age filter once. `--age <duration>` (1h/7d/2w/...) and
+    // `--older-than <days>` are mutually exclusive at clap; here we
+    // collapse both into the same "minimum age in seconds" so the loop
+    // logic stays uniform.
+    let age_floor_secs: Option<u64> = match (args.age.as_deref(), args.older_than) {
+        (Some(spec), None) => Some(parse_duration_to_secs(spec)?),
+        (None, Some(days)) => Some(days.saturating_mul(60 * 60 * 24)),
+        (None, None) => None,
+        (Some(_), Some(_)) => unreachable!("clap conflicts_with prevents this combination"),
+    };
+
     let now = chrono::Utc::now();
     let mut to_remove: Vec<&SessionRecord> = Vec::new();
 
@@ -715,10 +726,10 @@ pub fn run_prune(args: &PruneArgs) -> Result<()> {
             continue;
         }
 
-        let should_remove = if let Some(days) = args.older_than {
+        let should_remove = if let Some(min_secs) = age_floor_secs {
             if let Ok(started) = chrono::DateTime::parse_from_rfc3339(&s.started) {
                 let age = now.signed_duration_since(started);
-                age.num_days() >= days as i64
+                age.num_seconds() >= min_secs as i64
             } else {
                 false
             }

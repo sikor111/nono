@@ -2155,6 +2155,13 @@ pub struct PruneArgs {
     #[arg(long, value_name = "DAYS")]
     pub older_than: Option<u64>,
 
+    /// Remove sessions older than the given duration. Accepts the same
+    /// shorthand as `nono ps --since` (e.g. `1h`, `7d`, `2w`). Conflicts
+    /// with `--older-than` (the legacy days-only form). Use `--age` for
+    /// finer-grained windows like `48h` or `12h`.
+    #[arg(long, value_name = "DURATION", conflicts_with = "older_than")]
+    pub age: Option<String>,
+
     /// Keep only the N most recent sessions
     #[arg(long, value_name = "N")]
     pub keep: Option<usize>,
@@ -2535,6 +2542,27 @@ mod tests {
         } else {
             panic!("expected Inspect command");
         }
+    }
+
+    #[test]
+    fn prune_age_and_older_than_are_mutually_exclusive() {
+        // Both flags express the same intent (minimum session age) so
+        // clap should reject combining them — otherwise we'd have to
+        // pick a precedence rule and surprise the user.
+        let bare =
+            Cli::try_parse_from(["nono", "prune", "--age", "7d"]).expect("--age alone is fine");
+        if let Commands::Prune(args) = bare.command {
+            assert_eq!(args.age.as_deref(), Some("7d"));
+            assert!(args.older_than.is_none());
+        } else {
+            panic!("expected Prune");
+        }
+
+        let combined = Cli::try_parse_from(["nono", "prune", "--age", "7d", "--older-than", "30"]);
+        assert!(
+            combined.is_err(),
+            "--age + --older-than must be rejected at parse time"
+        );
     }
 
     #[test]
