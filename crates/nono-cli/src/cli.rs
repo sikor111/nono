@@ -1729,7 +1729,7 @@ pub struct SetupArgs {
     pub help: Option<bool>,
 }
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 #[command(disable_help_flag = true)]
 pub struct WhyArgs {
     /// Path to check
@@ -1836,6 +1836,27 @@ pub struct WhyArgs {
         conflicts_with_all = &["json", "compact", "field", "print_policy"],
     )]
     pub quiet: bool,
+
+    /// Refresh the verdict every DURATION (e.g. `2s`, `5s`,
+    /// `1m`) — top-like polling. Useful when editing a profile
+    /// and watching how the resolution affects a specific path
+    /// / command / port query in real time. Each tick re-loads
+    /// the profile and re-runs the query. Conflicts with the
+    /// structured-output / single-shot modes (`--json` /
+    /// `--compact` / `--field` / `--quiet`).
+    #[arg(
+        long,
+        help_heading = "OPTIONS",
+        value_name = "DURATION",
+        conflicts_with_all = &["json", "compact", "field", "quiet"],
+    )]
+    pub watch: Option<String>,
+
+    /// Cap `--watch` at N frames before exiting. Symmetric to
+    /// `nono inspect --max-iterations`. Requires `--watch`; has
+    /// no effect on a single-shot query.
+    #[arg(long, help_heading = "OPTIONS", value_name = "N", requires = "watch")]
+    pub max_iterations: Option<u64>,
 
     /// Query current sandbox state (use inside a sandboxed process)
     #[arg(long = "self", help_heading = "OPTIONS")]
@@ -3134,6 +3155,71 @@ mod tests {
             }
         } else {
             panic!("expected Profile");
+        }
+    }
+
+    #[test]
+    fn why_watch_parses_and_conflicts_with_single_shot_modes() {
+        // --watch refreshes the verdict on a fixed cadence;
+        // structured-output / quiet flags expect a single-shot
+        // render so combining them must be rejected. Same
+        // conflict shape as the four other --watch surfaces.
+        let bare = Cli::try_parse_from(["nono", "why", "--path", "/tmp", "--watch", "2s"])
+            .expect("--watch alone parses");
+        if let Commands::Why(args) = bare.command {
+            assert_eq!(args.watch.as_deref(), Some("2s"));
+            assert!(args.max_iterations.is_none());
+        } else {
+            panic!("expected Why");
+        }
+
+        let capped = Cli::try_parse_from([
+            "nono",
+            "why",
+            "--path",
+            "/tmp",
+            "--watch",
+            "1s",
+            "--max-iterations",
+            "3",
+        ])
+        .expect("--watch + --max-iterations parses");
+        if let Commands::Why(args) = capped.command {
+            assert_eq!(args.watch.as_deref(), Some("1s"));
+            assert_eq!(args.max_iterations, Some(3));
+        } else {
+            panic!("expected Why");
+        }
+
+        // --max-iterations is meaningless without --watch; clap's
+        // `requires` keeps the surface honest.
+        assert!(
+            Cli::try_parse_from(["nono", "why", "--path", "/tmp", "--max-iterations", "3"])
+                .is_err(),
+            "--max-iterations without --watch must fail to parse"
+        );
+
+        for invocation in [
+            vec!["nono", "why", "--path", "/tmp", "--watch", "2s", "--json"],
+            vec!["nono", "why", "--path", "/tmp", "--watch", "2s", "--quiet"],
+            vec![
+                "nono",
+                "why",
+                "--path",
+                "/tmp",
+                "--watch",
+                "2s",
+                "--json",
+                "--compact",
+            ],
+            vec![
+                "nono", "why", "--path", "/tmp", "--watch", "2s", "--json", "--field", "reason",
+            ],
+        ] {
+            assert!(
+                Cli::try_parse_from(&invocation).is_err(),
+                "{invocation:?}: --watch + structured/quiet flag must be rejected"
+            );
         }
     }
 

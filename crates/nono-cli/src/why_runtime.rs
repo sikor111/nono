@@ -4,6 +4,38 @@ use crate::{policy, profile, query_ext, sandbox_state};
 use nono::{AccessMode, CapabilitySet, NonoError, Result};
 
 pub(crate) fn run_why(args: WhyArgs) -> Result<()> {
+    if let Some(spec) = args.watch.as_deref() {
+        let interval = crate::session_commands::parse_duration_to_secs(spec)?;
+        let dur = std::time::Duration::from_secs(interval);
+        let mut iterations_remaining: Option<u64> = args.max_iterations;
+        loop {
+            // Clear screen + home cursor — same convention as
+            // `ps`, `inspect`, `profile show`, `profile diff`.
+            print!("\x1b[2J\x1b[H");
+            let now = chrono::Local::now().format("%H:%M:%S");
+            println!("nono why — refreshing every {spec}  [{now}]");
+            println!();
+            let mut once = args.clone();
+            once.watch = None;
+            once.max_iterations = None;
+            // Single-shot dispatch with watch cleared so the
+            // existing render body runs verbatim. Errors break
+            // the loop — the user wants live feedback, not a
+            // silent stall.
+            run_why_once(once)?;
+            if let Some(ref mut remaining) = iterations_remaining {
+                *remaining = remaining.saturating_sub(1);
+                if *remaining == 0 {
+                    return Ok(());
+                }
+            }
+            std::thread::sleep(dur);
+        }
+    }
+    run_why_once(args)
+}
+
+fn run_why_once(args: WhyArgs) -> Result<()> {
     use query_ext::{print_result, query_network, query_path, QueryResult};
     use sandbox_state::load_sandbox_state;
 
