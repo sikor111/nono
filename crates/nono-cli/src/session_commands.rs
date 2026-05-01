@@ -655,6 +655,11 @@ pub fn run_logs(args: &LogsArgs) -> Result<()> {
 pub fn run_inspect(args: &InspectArgs) -> Result<()> {
     let record = session::load_session(&args.session)?;
 
+    // Resolve the on-disk path of the session record once. Surfacing it
+    // alongside the JSON makes "where can I `cat` this?" answerable
+    // without the user re-deriving the path from the session_id.
+    let session_file = session::session_file_path(&record.session_id)?;
+
     // When --events is set, eagerly read the event log so both human and
     // JSON modes can use the same data. A missing log is not an error
     // (the session may have exited before any events were written) — we
@@ -671,9 +676,26 @@ pub fn run_inspect(args: &InspectArgs) -> Result<()> {
     };
 
     if args.json {
+        let session_file_str = session_file.display().to_string();
         let value = match &event_lines {
-            None => serde_json::to_value(&record)
-                .map_err(|e| NonoError::ConfigParse(format!("JSON serialization failed: {e}")))?,
+            None => {
+                // Without --events the document remains bare-record shape
+                // for backwards compatibility with existing
+                // `nono inspect --json` consumers — we just inject one
+                // additional `session_file` key alongside the existing
+                // fields. Adding (not removing/renaming) is safe under
+                // the consumers we know.
+                let mut value = serde_json::to_value(&record).map_err(|e| {
+                    NonoError::ConfigParse(format!("JSON serialization failed: {e}"))
+                })?;
+                if let Some(obj) = value.as_object_mut() {
+                    obj.insert(
+                        "session_file".to_string(),
+                        serde_json::Value::String(session_file_str),
+                    );
+                }
+                value
+            }
             Some(lines) => {
                 // Each ndjson line is itself a JSON document; preserve that
                 // structure so consumers don't have to re-parse strings.
@@ -686,6 +708,7 @@ pub fn run_inspect(args: &InspectArgs) -> Result<()> {
                     .collect();
                 serde_json::json!({
                     "session": record,
+                    "session_file": session_file_str,
                     "events": events,
                 })
             }
@@ -719,6 +742,7 @@ pub fn run_inspect(args: &InspectArgs) -> Result<()> {
     if let Some(ref rollback) = record.rollback_session {
         println!("Rollback:   {}", rollback);
     }
+    println!("File:       {}", session_file.display());
 
     if let Some(lines) = event_lines {
         let header = match args.logs_tail {
