@@ -232,6 +232,16 @@
   requires `--field`. Common use: `nono profile schema
   --field title` returns "nono Profile" without piping the
   full doc through `jq`
+- *(profile)* `guide --section <NAME>` and `--list-sections`
+  give targeted access to the embedded authoring guide. The
+  doc is ~500 lines across 7 H2 sections; reading just one
+  section without scrolling was the obvious gap.
+  `--list-sections` prints the H2 titles one per line for
+  shell-tab-friendly discovery; `--section` matches case-
+  insensitively against substrings of those titles, so both
+  `--section validation` and `--section "5. Validation"`
+  return the same content. Misses error with a
+  `--list-sections` hint instead of emitting nothing
 
 ### Observability
 
