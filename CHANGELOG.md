@@ -182,6 +182,14 @@
   codes are preserved — `--field` prints the extracted value and
   still propagates the underlying `ProfileParse` error for
   consumers that care about both
+- *(ps)* `--field <PATH>` extracts a single key from the
+  session-list JSON array. `--field /0/session_id`,
+  `--field /0/profile`, etc. With this addition the `--field`
+  set covers every JSON-emitting nono surface — profile show /
+  diff / list / groups / validate, plus inspect, why, and ps
+  (8 commands total). `--output csv|tsv|ndjson` paths are
+  intentionally untouched: those have line-oriented conventions
+  and don't fit the jq-style extraction model
 
 ### Observability
 
