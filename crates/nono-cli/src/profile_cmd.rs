@@ -396,6 +396,24 @@ fn cmd_guide(args: ProfileGuideArgs) -> Result<()> {
         return Ok(());
     }
 
+    if let Some(ref needle) = args.search {
+        let sections = parse_guide_sections(guide);
+        let hits = search_guide_sections(&sections, needle);
+        if hits.is_empty() {
+            return Err(NonoError::ProfileParse(format!(
+                "no guide content matches {needle:?}. Use `nono profile guide \
+                 --list-sections` to see available sections"
+            )));
+        }
+        for (title, line_hits) in &hits {
+            println!("## {title}");
+            for (idx, line) in line_hits {
+                println!("  {idx:>4}: {line}");
+            }
+        }
+        return Ok(());
+    }
+
     let stdout = std::io::stdout();
     let mut handle = stdout.lock();
     handle
@@ -448,6 +466,35 @@ fn find_guide_section<'a>(
     sections
         .iter()
         .find(|(title, _)| title.to_lowercase().contains(&q))
+}
+
+/// Walk every section, return the lines that match `needle` as a
+/// case-insensitive substring grouped by section title. Only
+/// sections with at least one hit are returned. Line numbers are
+/// 1-based and relative to the section body (so the user sees a
+/// useful position cue without having to count from the document
+/// start). The title heading itself is intentionally NOT searched —
+/// `--section` already covers heading-based lookup, and double-
+/// counting would clutter the output. Pure helper so it's unit-
+/// testable without touching the embedded literal.
+fn search_guide_sections<'a>(
+    sections: &'a [(String, String)],
+    needle: &str,
+) -> Vec<(&'a str, Vec<(usize, &'a str)>)> {
+    let q = needle.to_lowercase();
+    let mut out: Vec<(&'a str, Vec<(usize, &'a str)>)> = Vec::new();
+    for (title, body) in sections {
+        let hits: Vec<(usize, &'a str)> = body
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| l.to_lowercase().contains(&q))
+            .map(|(i, l)| (i.saturating_add(1), l))
+            .collect();
+        if !hits.is_empty() {
+            out.push((title.as_str(), hits));
+        }
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -3491,6 +3538,60 @@ Second body.
         assert_eq!(sections.len(), 2);
         assert!(sections[0].1.contains("### A.1"));
         assert!(sections[0].1.contains("detail"));
+    }
+
+    #[test]
+    fn search_guide_sections_groups_hits_by_section_with_relative_line_nums() {
+        // Two-section guide; needle hits in both bodies (case-
+        // insensitive). Line numbers must be 1-based and reset
+        // per section, so the user reads the position cue in the
+        // local-to-section frame they see in the terminal.
+        let sections = vec![
+            (
+                "Networking".to_string(),
+                "TCP ports go here\nUDP not yet\nmore tcp talk\n".to_string(),
+            ),
+            ("Filesystem".to_string(), "no match here\n".to_string()),
+            ("Other".to_string(), "tcp again\n".to_string()),
+        ];
+        let hits = search_guide_sections(&sections, "tcp");
+        assert_eq!(
+            hits.len(),
+            2,
+            "Filesystem section had no hit, must be skipped"
+        );
+        // First section: lines 1 and 3 contain 'tcp' (line 2 'UDP'
+        // does not).
+        assert_eq!(hits[0].0, "Networking");
+        assert_eq!(hits[0].1.len(), 2);
+        assert_eq!(hits[0].1[0].0, 1);
+        assert!(hits[0].1[0].1.contains("TCP"));
+        assert_eq!(hits[0].1[1].0, 3);
+        assert!(hits[0].1[1].1.contains("tcp"));
+        // Third section: single hit on line 1 (relative).
+        assert_eq!(hits[1].0, "Other");
+        assert_eq!(hits[1].1.len(), 1);
+        assert_eq!(hits[1].1[0].0, 1);
+    }
+
+    #[test]
+    fn search_guide_sections_returns_empty_when_no_section_matches() {
+        let sections = vec![
+            ("A".to_string(), "alpha\nbeta\n".to_string()),
+            ("B".to_string(), "gamma\n".to_string()),
+        ];
+        // Caller (cmd_guide) translates empty into a `ProfileParse`
+        // error with a `--list-sections` hint.
+        assert!(search_guide_sections(&sections, "delta").is_empty());
+    }
+
+    #[test]
+    fn search_guide_sections_does_not_search_titles() {
+        // Title-based lookup is what `--section` already does.
+        // `--search` is body-only so the two flags don't double-
+        // count or collide.
+        let sections = vec![("validation".to_string(), "body has no hit\n".to_string())];
+        assert!(search_guide_sections(&sections, "validation").is_empty());
     }
 
     #[test]

@@ -837,6 +837,23 @@ pub struct ProfileGuideArgs {
     /// one. Useful for shell-tab-completion-like discovery.
     #[arg(long)]
     pub list_sections: bool,
+
+    /// Search the guide for a keyword (case-insensitive substring
+    /// matched against section bodies). Output is grep-like: every
+    /// section with a hit emits its `## ` heading followed by each
+    /// matching line prefixed with the 1-based line number within
+    /// that section. Useful for discovery — `nono profile guide
+    /// --search tcp` surfaces every section that mentions TCP
+    /// without you having to grep through the rendered document.
+    /// Exits non-zero with a `--list-sections` hint if no section
+    /// matches. Conflicts with `--section` / `--list-sections`
+    /// (different display modes).
+    #[arg(
+        long,
+        value_name = "KEYWORD",
+        conflicts_with_all = &["section", "list_sections"],
+    )]
+    pub search: Option<String>,
 }
 
 #[derive(Parser, Debug)]
@@ -4087,6 +4104,50 @@ mod tests {
             conflict.is_err(),
             "--section + --list-sections must conflict"
         );
+    }
+
+    #[test]
+    fn profile_guide_search_parses_and_conflicts_with_other_modes() {
+        // --search is grep over bodies; pairing with --section or
+        // --list-sections would mean two display modes asking for
+        // different output, so clap rejects.
+        let bare = Cli::try_parse_from(["nono", "profile", "guide", "--search", "tcp"])
+            .expect("--search parses");
+        if let Commands::Profile(args) = bare.command {
+            if let crate::cli::ProfileCommands::Guide(g) = args.command {
+                assert_eq!(g.search.as_deref(), Some("tcp"));
+                assert!(g.section.is_none() && !g.list_sections);
+            } else {
+                panic!("expected Profile::Guide");
+            }
+        } else {
+            panic!("expected Profile");
+        }
+
+        for invocation in [
+            vec![
+                "nono",
+                "profile",
+                "guide",
+                "--search",
+                "tcp",
+                "--section",
+                "validation",
+            ],
+            vec![
+                "nono",
+                "profile",
+                "guide",
+                "--search",
+                "tcp",
+                "--list-sections",
+            ],
+        ] {
+            assert!(
+                Cli::try_parse_from(&invocation).is_err(),
+                "{invocation:?}: --search + display-mode flag must be rejected"
+            );
+        }
     }
 
     #[test]
