@@ -166,6 +166,22 @@
   `schema_version: 1`; new keys are additive within the version.
   `-o <FILE>` writes to a file instead of stdout, mirroring
   `nono profile schema`'s output convention
+- *(profile)* `groups --field <PATH>` extends the `--field` set
+  to the groups subcommand. Both shapes (list array, detail
+  object) are navigable — JSON Pointer paths reach individual
+  entries (`/0/name`, `/security/groups/0`) without piping to jq
+- *(profile)* `list --field <PATH>` does the same for the
+  profile list — the array of `{name, source, pack, description,
+  extends}` entries is navigable by JSON Pointer (`/0/name`,
+  `/0/source`)
+- *(profile)* `validate --field <PATH>` closes the profile
+  `--field` set (6/6 surfaces). Top-level keys `valid` /
+  `errors` / `warnings` give shell scripts a clean way to branch
+  on validation results: `[ "$(nono profile validate p.json
+  --json --field valid)" = "true" ]`. Validation-failure exit
+  codes are preserved — `--field` prints the extracted value and
+  still propagates the underlying `ProfileParse` error for
+  consumers that care about both
 
 ### Observability
 
