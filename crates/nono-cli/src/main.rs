@@ -110,8 +110,30 @@ fn main() {
         }
         error!("{}", e);
         eprintln!("nono: {}", e);
+        if let nono::NonoError::PathNotFound(path) = &e {
+            eprintln!();
+            eprintln!("{}", path_not_found_hint(path));
+        }
         std::process::exit(1);
     }
+}
+
+/// Render a one-paragraph hint shown after `nono: Path does not exist: <path>`.
+///
+/// The lib only grants access to paths that exist at startup (they're
+/// canonicalized then to close symlink-race windows), so a typo in
+/// `--allow` or a directory the sandboxed command should create itself
+/// shows up as `NonoError::PathNotFound`. Pointing at `mkdir -p` and at
+/// granting the parent directory covers the two ways out without
+/// requiring the user to read source.
+fn path_not_found_hint(path: &std::path::Path) -> String {
+    format!(
+        "hint: nono only grants access to existing paths (canonicalized at\n\
+         \x20     startup to prevent symlink races). If `{}` should be created\n\
+         \x20     by the sandboxed command, `mkdir -p` it first or grant the\n\
+         \x20     parent directory with `--allow <parent>`.",
+        path.display(),
+    )
 }
 
 #[cfg(test)]
@@ -135,6 +157,32 @@ mod tests {
 
     fn sandbox_args() -> SandboxArgs {
         SandboxArgs::default()
+    }
+
+    #[test]
+    fn path_not_found_hint_includes_the_offending_path_and_actionable_remediation() {
+        let hint = path_not_found_hint(std::path::Path::new("/tmp/scratch"));
+        // The hint must echo the path that failed so the user knows
+        // *which* path they typo'd or forgot to create — bare "the path"
+        // wouldn't be helpful when a profile resolves multiple at once.
+        assert!(
+            hint.contains("/tmp/scratch"),
+            "hint must mention the failing path: {hint}"
+        );
+        // And it must point at concrete remediations (mkdir + grant
+        // parent), not just a generic "path missing" message.
+        assert!(
+            hint.contains("mkdir -p"),
+            "hint must suggest `mkdir -p`: {hint}"
+        );
+        assert!(
+            hint.contains("--allow <parent>"),
+            "hint must suggest granting the parent directory: {hint}"
+        );
+        assert!(
+            hint.starts_with("hint:"),
+            "must use the `hint:` prefix used by the BlockedCommand path: {hint}"
+        );
     }
 
     #[test]
