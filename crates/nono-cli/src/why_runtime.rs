@@ -18,7 +18,12 @@ pub(crate) fn run_why(args: WhyArgs) -> Result<()> {
                     message: "Not running inside a nono sandbox".to_string(),
                 };
                 if args.json {
-                    let json = serde_json::to_string_pretty(&result).map_err(|e| {
+                    let json = if args.compact {
+                        serde_json::to_string(&result)
+                    } else {
+                        serde_json::to_string_pretty(&result)
+                    }
+                    .map_err(|e| {
                         NonoError::ConfigParse(format!("JSON serialization failed: {}", e))
                     })?;
                     println!("{}", json);
@@ -114,8 +119,12 @@ pub(crate) fn run_why(args: WhyArgs) -> Result<()> {
     };
 
     if args.json {
-        let json = serde_json::to_string_pretty(&result)
-            .map_err(|e| NonoError::ConfigParse(format!("JSON serialization failed: {}", e)))?;
+        let json = if args.compact {
+            serde_json::to_string(&result)
+        } else {
+            serde_json::to_string_pretty(&result)
+        }
+        .map_err(|e| NonoError::ConfigParse(format!("JSON serialization failed: {}", e)))?;
         println!("{}", json);
     } else {
         print_result(&result);

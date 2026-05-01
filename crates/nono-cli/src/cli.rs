@@ -1590,6 +1590,12 @@ pub struct WhyArgs {
     #[arg(long, help_heading = "OPTIONS")]
     pub json: bool,
 
+    /// Emit compact JSON (no whitespace / indentation) instead of the
+    /// default pretty-printed form. Useful for streaming into `jq -c`.
+    /// Has no effect without `--json`.
+    #[arg(long, requires = "json", help_heading = "OPTIONS")]
+    pub compact: bool,
+
     /// Query current sandbox state (use inside a sandboxed process)
     #[arg(long = "self", help_heading = "OPTIONS")]
     pub self_query: bool,
@@ -2586,6 +2592,25 @@ mod tests {
             assert_eq!(args.logs_tail, None);
         } else {
             panic!("expected Inspect command");
+        }
+    }
+
+    #[test]
+    fn why_compact_requires_json_flag() {
+        // Same ergonomics as `nono inspect --compact` and
+        // `nono ps --compact`: pure-text output has no compact form,
+        // so `--compact` without `--json` should fail at parse time.
+        let bare = Cli::try_parse_from(["nono", "why", "--path", "/tmp", "--compact"]);
+        assert!(bare.is_err(), "--compact without --json must fail to parse");
+
+        let with_json =
+            Cli::try_parse_from(["nono", "why", "--path", "/tmp", "--json", "--compact"])
+                .expect("parse");
+        if let Commands::Why(args) = with_json.command {
+            assert!(args.json);
+            assert!(args.compact);
+        } else {
+            panic!("expected Why");
         }
     }
 
