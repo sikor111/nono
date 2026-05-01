@@ -152,6 +152,13 @@
   capability set. Closes the `--field` set across every
   JSON-emitting nono surface (profile show / profile diff /
   inspect / why)
+- *(ps)* `--columns <list>` picks which columns to render in the
+  default human-readable table — `session,name,status,attach,pid,
+  uptime,profile,command`. Pass any subset (e.g. `--columns
+  session,status,command`) for a narrower triage view, or reorder
+  (`--columns command,session` puts COMMAND first). Conflicts
+  with `--short`. Machine outputs (`--json`, `--output csv|tsv|
+  ndjson`) keep their stable schemas and ignore the flag
 
 ### Observability
 
