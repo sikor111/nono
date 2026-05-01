@@ -136,6 +136,22 @@
   a `matches?` column. `--tcp-bind --explain` intentionally hides
   `tcp_connect_ports` rows so the bind-only contract carries
   through to the explainer too
+- *(profile)* `diff --field <PATH>` mirrors `show --field` for
+  the diff document — useful for `if [ "$(nono profile diff a b
+  --json --field /groups/added | jq length)" -gt 0 ]` style guards
+  or capturing one section of the diff into a shell variable
+- *(inspect)* `--field <PATH>` extracts a single key from the
+  session JSON. Works with the bare-record shape and the
+  `{session, events, session_file}` shape (e.g. `--field
+  /events/0/timestamp` reaches into the event log without
+  re-parsing the document with `jq`)
+- *(why)* `--field <PATH>` for both the verdict path and
+  `--print-policy`. `nono why --command rm --json --field reason`
+  captures the verdict's reason code; `nono why --print-policy
+  --json --field /schema_version` reads one key from the dumped
+  capability set. Closes the `--field` set across every
+  JSON-emitting nono surface (profile show / profile diff /
+  inspect / why)
 
 ### Observability
 
