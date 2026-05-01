@@ -1626,6 +1626,19 @@ pub struct WhyArgs {
     #[arg(long, help_heading = "OPTIONS")]
     pub explain: bool,
 
+    /// Don't run any query — instead print the resolved capability set
+    /// that *would* be used as the query context. Useful for
+    /// understanding what `--profile NAME` grants in aggregate before
+    /// poking individual paths / hosts / commands. Mutually exclusive
+    /// with the query flags (`--path`, `--host`, `--net`, `--tcp`,
+    /// `--command`).
+    #[arg(
+        long,
+        help_heading = "OPTIONS",
+        conflicts_with_all = &["path", "host", "net", "tcp", "command_name"],
+    )]
+    pub print_policy: bool,
+
     /// Query current sandbox state (use inside a sandboxed process)
     #[arg(long = "self", help_heading = "OPTIONS")]
     pub self_query: bool,
@@ -2694,6 +2707,34 @@ mod tests {
             }
         } else {
             panic!("expected Profile");
+        }
+    }
+
+    #[test]
+    fn why_print_policy_conflicts_with_query_flags() {
+        // --print-policy is a different mode (dump caps, no query).
+        // Combining with any query flag would be ambiguous; clap should
+        // reject all such combinations at parse time.
+        for invocation in [
+            vec!["nono", "why", "--print-policy", "--path", "/tmp"],
+            vec!["nono", "why", "--print-policy", "--host", "example.com"],
+            vec!["nono", "why", "--print-policy", "--net", "example.com:443"],
+            vec!["nono", "why", "--print-policy", "--tcp", "443"],
+            vec!["nono", "why", "--print-policy", "--command", "rm"],
+        ] {
+            assert!(
+                Cli::try_parse_from(&invocation).is_err(),
+                "{:?}: --print-policy + query flag must be rejected",
+                invocation
+            );
+        }
+
+        // Standalone parses fine — emits the policy snapshot.
+        let solo = Cli::try_parse_from(["nono", "why", "--print-policy"]).expect("parse");
+        if let Commands::Why(args) = solo.command {
+            assert!(args.print_policy);
+        } else {
+            panic!("expected Why");
         }
     }
 

@@ -95,6 +95,53 @@ pub(crate) fn run_why(args: WhyArgs) -> Result<()> {
         (caps, vec![])
     };
 
+    // `--print-policy` short-circuits the query path and just dumps the
+    // resolved CapabilitySet. Conflicts with the query flags at the
+    // clap layer, so reaching here means the user opted in explicitly.
+    if args.print_policy {
+        if args.json {
+            // Reuse the same JSON shape as `--dry-run-json` (minus the
+            // command + secrets), so consumers writing tooling around
+            // policy snapshots see a familiar layout.
+            // Manually construct extras since `DryRunJsonExtras::empty`
+            // is `#[cfg(test)]`-gated (intentionally — production
+            // dry-run callers always populate this from
+            // `PreparedSandbox`). For `nono why --print-policy` the
+            // proxy / launch-services / GPU bits aren't relevant to
+            // a query, so inert defaults are correct here.
+            let extras = crate::output::DryRunJsonExtras {
+                allowed_env_vars: None,
+                override_deny_paths: &overridden_paths,
+                network_profile: None,
+                allow_domain: &[],
+                listen_ports: &[],
+                capability_elevation: false,
+                allow_launch_services_active: false,
+                allow_gpu_active: false,
+            };
+            let value = crate::output::capabilities_to_json(
+                &caps,
+                std::ffi::OsStr::new("(why)"),
+                &[],
+                0,
+                &extras,
+            );
+            let json = if args.compact {
+                serde_json::to_string(&value)
+            } else {
+                serde_json::to_string_pretty(&value)
+            }
+            .map_err(|e| NonoError::ConfigParse(format!("JSON serialization failed: {e}")))?;
+            println!("{}", json);
+        } else {
+            // verbose=1 surfaces every cap (otherwise system grants get
+            // collapsed into "+ N system/group paths" since the user
+            // explicitly asked to see the full picture).
+            crate::output::print_capabilities(&caps, 1, false);
+        }
+        return Ok(());
+    }
+
     // For `--path --explain` we need the full match list alongside the
     // verdict; non-path queries fall back to the regular `query_path`/
     // `query_network`/etc. paths since the explainer is path-specific.
