@@ -190,6 +190,27 @@
   (8 commands total). `--output csv|tsv|ndjson` paths are
   intentionally untouched: those have line-oriented conventions
   and don't fit the jq-style extraction model
+- *(ps)* `--max-iterations <N>` caps `--watch` at N frames
+  before clean exit. Useful for CI smoke tests of watch mode
+  (no infinite hang) and capturing fixed-size samples without
+  manual Ctrl-C. Trailing inter-frame sleep deliberately
+  skipped after the last render — exit is immediate, not
+  delayed by an extra `interval`. Requires `--watch`
+- *(prune)* `--json` + `--compact` emit a machine-readable
+  document instead of the human-readable progress lines. Shape:
+  `{"action": "would-remove" | "removed", "count": N,
+  "sessions": [{"session_id", "started"}, ...]}`. Both the
+  `--dry-run` preview and the actual deletion path use the same
+  shape; the empty branch (nothing to prune) emits the same
+  structure with `count: 0`. Conflicts with `--interactive`
+  (the prompt would interleave with the JSON document on
+  shared output streams)
+- *(prune)* `--field <PATH>` extracts a single field from the
+  JSON output — ninth `--field` surface across the CLI.
+  `--field count` returns the bare integer; JSON Pointer paths
+  reach individual session entries (`/sessions/0/session_id`).
+  Lets `count=$(nono prune --dry-run --json --field count)`
+  work without external `jq`
 
 ### Observability
 
