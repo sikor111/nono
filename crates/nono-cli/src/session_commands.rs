@@ -865,7 +865,7 @@ pub fn run_logs(args: &LogsArgs) -> Result<()> {
     if args.follow {
         follow_event_log(&events_path, args.tail, args.json)
     } else {
-        let lines = read_event_log_lines(&events_path, args.tail)?;
+        let lines = read_event_log_lines(&events_path, args.tail, None)?;
         print_event_log_lines(&lines, args.json)
     }
 }
@@ -950,7 +950,11 @@ pub fn run_inspect(args: &InspectArgs) -> Result<()> {
     let event_lines: Option<Vec<String>> = if args.events {
         let events_path = session::session_events_path(&record.session_id)?;
         if events_path.exists() {
-            Some(read_event_log_lines(&events_path, args.logs_tail)?)
+            Some(read_event_log_lines(
+                &events_path,
+                args.logs_tail,
+                args.grep.as_deref(),
+            )?)
         } else {
             Some(Vec::new())
         }
@@ -1031,7 +1035,11 @@ fn print_inspect_record_human(args: &InspectArgs, record: &SessionRecord) -> Res
     let event_lines: Option<Vec<String>> = if args.events {
         let events_path = session::session_events_path(&record.session_id)?;
         if events_path.exists() {
-            Some(read_event_log_lines(&events_path, args.logs_tail)?)
+            Some(read_event_log_lines(
+                &events_path,
+                args.logs_tail,
+                args.grep.as_deref(),
+            )?)
         } else {
             Some(Vec::new())
         }
@@ -1316,12 +1324,22 @@ pub fn run_prune(args: &PruneArgs) -> Result<()> {
     Ok(())
 }
 
-fn read_event_log_lines(path: &Path, tail: Option<usize>) -> Result<Vec<String>> {
+fn read_event_log_lines(
+    path: &Path,
+    tail: Option<usize>,
+    grep: Option<&str>,
+) -> Result<Vec<String>> {
     let file = std::fs::File::open(path).map_err(|e| NonoError::ConfigRead {
         path: path.to_path_buf(),
         source: e,
     })?;
     let reader = std::io::BufReader::new(file);
+    // Lowercase the needle once outside the hot loop. `--grep` is
+    // applied BEFORE the tail truncation so that `--grep X
+    // --logs-tail N` means "last N matches", not "last N events of
+    // which some happen to match" — the latter would silently drop
+    // matches the user explicitly asked for.
+    let needle: Option<String> = grep.map(|s| s.to_lowercase());
 
     if let Some(limit) = tail {
         let mut lines = VecDeque::with_capacity(limit.min(256));
@@ -1330,6 +1348,11 @@ fn read_event_log_lines(path: &Path, tail: Option<usize>) -> Result<Vec<String>>
                 path: path.to_path_buf(),
                 source: e,
             })?;
+            if let Some(ref n) = needle {
+                if !line.to_lowercase().contains(n) {
+                    continue;
+                }
+            }
             if lines.len() == limit {
                 let _ = lines.pop_front();
             }
@@ -1337,13 +1360,20 @@ fn read_event_log_lines(path: &Path, tail: Option<usize>) -> Result<Vec<String>>
         }
         Ok(lines.into_iter().collect())
     } else {
-        reader
-            .lines()
-            .collect::<std::io::Result<Vec<_>>>()
-            .map_err(|e| NonoError::ConfigRead {
+        let mut out: Vec<String> = Vec::new();
+        for line in reader.lines() {
+            let line = line.map_err(|e| NonoError::ConfigRead {
                 path: path.to_path_buf(),
                 source: e,
-            })
+            })?;
+            if let Some(ref n) = needle {
+                if !line.to_lowercase().contains(n) {
+                    continue;
+                }
+            }
+            out.push(line);
+        }
+        Ok(out)
     }
 }
 
@@ -1368,7 +1398,7 @@ fn print_event_log_lines(lines: &[String], as_json: bool) -> Result<()> {
 }
 
 fn follow_event_log(path: &Path, tail: Option<usize>, as_json: bool) -> Result<()> {
-    let initial_lines = read_event_log_lines(path, tail)?;
+    let initial_lines = read_event_log_lines(path, tail, None)?;
     if as_json {
         for line in &initial_lines {
             println!("{line}");
@@ -2185,6 +2215,59 @@ mod tests {
             !row.contains("triage-1"),
             "name column must be omitted when not selected: {row:?}"
         );
+    }
+
+    #[test]
+    fn read_event_log_lines_grep_filters_case_insensitively_before_tail() {
+        // Four events; --grep "DENIED" (mixed case) must hit two
+        // (lines 2 and 4). With --logs-tail 1 layered on top, the
+        // result is the LAST match — line 4 — confirming
+        // grep-then-tail order, NOT tail-then-grep (which would
+        // truncate to line 4 first and then match it).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("events.ndjson");
+        std::fs::write(
+            &path,
+            "{\"kind\":\"exec\",\"command\":\"ls\"}\n\
+             {\"kind\":\"denied\",\"path\":\"/etc/passwd\"}\n\
+             {\"kind\":\"allowed\",\"path\":\"/tmp\"}\n\
+             {\"kind\":\"denied\",\"command\":\"sudo\"}\n",
+        )
+        .expect("write events");
+
+        // No tail — grep alone returns both denied lines, in order.
+        let all_denied = read_event_log_lines(&path, None, Some("DENIED")).expect("read");
+        assert_eq!(all_denied.len(), 2);
+        assert!(all_denied[0].contains("/etc/passwd"));
+        assert!(all_denied[1].contains("sudo"));
+
+        // grep+tail-1 → just the LAST match (line 4 in source). If
+        // we'd applied tail BEFORE grep we'd have read line 4 only,
+        // matched it, and got the same result by coincidence — the
+        // discriminating case is grep+tail-2, which must still
+        // return the two matches not the last two source lines.
+        let tail_one = read_event_log_lines(&path, Some(1), Some("denied")).expect("read");
+        assert_eq!(tail_one.len(), 1);
+        assert!(tail_one[0].contains("sudo"));
+        let tail_two = read_event_log_lines(&path, Some(2), Some("denied")).expect("read");
+        assert_eq!(tail_two.len(), 2);
+        assert!(tail_two[0].contains("/etc/passwd"));
+        assert!(tail_two[1].contains("sudo"));
+
+        // No match → empty vec, NOT an error. Inspect renders
+        // "(no events recorded)" downstream which is the right
+        // signal here too.
+        let none = read_event_log_lines(&path, None, Some("nonexistent_xyz")).expect("read");
+        assert!(none.is_empty());
+
+        // No grep → all four lines (regression guard for the
+        // existing tail-only and full-read paths).
+        let all = read_event_log_lines(&path, None, None).expect("read");
+        assert_eq!(all.len(), 4);
+        let last_two_no_grep = read_event_log_lines(&path, Some(2), None).expect("read");
+        assert_eq!(last_two_no_grep.len(), 2);
+        assert!(last_two_no_grep[0].contains("/tmp"));
+        assert!(last_two_no_grep[1].contains("sudo"));
     }
 
     #[test]

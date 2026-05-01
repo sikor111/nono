@@ -2652,6 +2652,19 @@ pub struct InspectArgs {
     #[arg(long, value_name = "N", requires = "events")]
     pub logs_tail: Option<usize>,
 
+    /// Filter the event log to lines that contain KEYWORD as a
+    /// case-insensitive substring (grep-style). Useful for
+    /// honing in on specific events without scrolling — e.g.
+    /// `nono inspect <id> --events --grep denied` shows only
+    /// the denial events; combined with `--watch` you get a
+    /// live filtered tail. Applied BEFORE `--logs-tail` so a
+    /// `--grep denied --logs-tail 10` means "last 10 denial
+    /// events", not "last 10 events of which some happen to
+    /// be denials". Requires `--events`. Has no effect without
+    /// it.
+    #[arg(long, value_name = "KEYWORD", requires = "events")]
+    pub grep: Option<String>,
+
     /// Include file changes
     #[arg(long)]
     pub changes: bool,
@@ -3126,6 +3139,50 @@ mod tests {
             assert!(args.compact);
         } else {
             panic!("expected Inspect");
+        }
+    }
+
+    #[test]
+    fn inspect_grep_requires_events_and_parses_with_other_flags() {
+        // --grep filters event lines by substring; without
+        // --events there are no events to filter, so clap rejects
+        // the invocation. Same `requires` pattern as --logs-tail.
+        let bare = Cli::try_parse_from(["nono", "inspect", "abc123", "--grep", "denied"]);
+        assert!(
+            bare.is_err(),
+            "--grep without --events must fail at parse time"
+        );
+
+        let with_events =
+            Cli::try_parse_from(["nono", "inspect", "abc123", "--events", "--grep", "denied"])
+                .expect("--grep + --events parses");
+        if let Commands::Inspect(args) = with_events.command {
+            assert!(args.events);
+            assert_eq!(args.grep.as_deref(), Some("denied"));
+            assert!(args.logs_tail.is_none());
+        } else {
+            panic!("expected Inspect command");
+        }
+
+        // --grep composes naturally with --logs-tail: filter then
+        // truncate. Both flags should be parsed alongside --events
+        // without conflicts.
+        let combo = Cli::try_parse_from([
+            "nono",
+            "inspect",
+            "abc123",
+            "--events",
+            "--grep",
+            "denied",
+            "--logs-tail",
+            "5",
+        ])
+        .expect("--grep + --logs-tail must compose with --events");
+        if let Commands::Inspect(args) = combo.command {
+            assert_eq!(args.grep.as_deref(), Some("denied"));
+            assert_eq!(args.logs_tail, Some(5));
+        } else {
+            panic!("expected Inspect command");
         }
     }
 
