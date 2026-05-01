@@ -439,6 +439,19 @@
   full workflow: `show` (rendering) + `diff` (drift) +
   `why` (resolution) + `validate` (correctness) + `inspect`
   (events) + `ps` (runtime state)
+- *(inspect)* `--grep <KEYWORD>` filters the event log to
+  lines containing the keyword as a case-insensitive
+  substring — `nono inspect <id> --events --grep denied`
+  hones in on denial events without scrolling. Combined
+  with `--watch`, you get a live filtered tail: `nono
+  inspect <id> --events --grep denied --watch 1s` shows
+  denial events as they happen during a still-running
+  session. Critical detail: `--grep` is applied BEFORE
+  `--logs-tail`, so `--grep denied --logs-tail 10` means
+  "last 10 denial events", NOT "last 10 events of which
+  some happen to be denials" (the latter would silently
+  drop matches the user explicitly asked for). Requires
+  `--events`. First `--grep` surface
 
 ### Observability
 
