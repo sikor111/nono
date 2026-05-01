@@ -797,6 +797,12 @@ pub struct ProfileShowArgs {
     /// Output as JSON
     #[arg(long)]
     pub json: bool,
+    /// Emit compact JSON (no whitespace / indentation) instead of the
+    /// default pretty-printed form. Useful for streaming into `jq -c`
+    /// or pinning a profile snapshot in an audit log. Has no effect
+    /// without `--json`.
+    #[arg(long, requires = "json")]
+    pub compact: bool,
     /// Show raw paths before expansion (e.g., $HOME instead of /Users/luke)
     #[arg(long)]
     pub raw: bool,
@@ -2592,6 +2598,30 @@ mod tests {
             assert_eq!(args.logs_tail, None);
         } else {
             panic!("expected Inspect command");
+        }
+    }
+
+    #[test]
+    fn profile_show_compact_requires_json_flag() {
+        // Same ergonomics as iter 32-34: compact has no meaning for the
+        // human-readable text output (which is colored / multi-section
+        // by design), so `--compact` without `--json` is rejected at
+        // parse time.
+        let bare = Cli::try_parse_from(["nono", "profile", "show", "default", "--compact"]);
+        assert!(bare.is_err(), "--compact without --json must fail to parse");
+
+        let with_json =
+            Cli::try_parse_from(["nono", "profile", "show", "default", "--json", "--compact"])
+                .expect("parse");
+        if let Commands::Profile(args) = with_json.command {
+            if let crate::cli::ProfileCommands::Show(show) = args.command {
+                assert!(show.json);
+                assert!(show.compact);
+            } else {
+                panic!("expected Profile::Show");
+            }
+        } else {
+            panic!("expected Profile");
         }
     }
 

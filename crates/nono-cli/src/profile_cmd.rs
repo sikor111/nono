@@ -24,6 +24,13 @@ fn to_json(val: &serde_json::Value) -> Result<String> {
         .map_err(|e| NonoError::ProfileParse(format!("JSON serialization failed: {e}")))
 }
 
+/// Serialize a value as compact (no whitespace) JSON. Used by callers
+/// that pass `--compact` so they can stream the result into `jq -c`.
+fn to_json_compact(val: &serde_json::Value) -> Result<String> {
+    serde_json::to_string(val)
+        .map_err(|e| NonoError::ProfileParse(format!("JSON serialization failed: {e}")))
+}
+
 /// Prefix used for all profile command output
 fn prefix() -> colored::ColoredString {
     let t = theme::current();
@@ -815,7 +822,12 @@ pub(crate) fn cmd_show(args: ProfileShowArgs) -> Result<()> {
 
     if args.json {
         let val = profile_to_json(&args.profile, &profile, &raw_extends);
-        println!("{}", to_json(&val)?);
+        let rendered = if args.compact {
+            to_json_compact(&val)?
+        } else {
+            to_json(&val)?
+        };
+        println!("{rendered}");
         return Ok(());
     }
 
