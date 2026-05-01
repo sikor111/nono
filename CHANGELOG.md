@@ -242,6 +242,15 @@
   `--section validation` and `--section "5. Validation"`
   return the same content. Misses error with a
   `--list-sections` hint instead of emitting nothing
+- *(why)* `--quiet` suppresses stdout and signals the verdict
+  via exit code: `0` allowed, `2` denied, `3` not running
+  inside a sandbox (only reachable via `--self`). Lets shell
+  scripts branch cleanly: `if nono why --command rm --profile
+  X --quiet; then echo "rm allowed"; fi`. The 0/2 split
+  mirrors the convention where `1` means "actual error" so
+  `--quiet` doesn't conflate denials with failures. Conflicts
+  with `--json` / `--compact` / `--field` (those modes ask
+  for output) and `--print-policy` (no verdict to encode)
 
 ### Observability
 
