@@ -843,6 +843,10 @@ pub struct ProfileValidateArgs {
     /// Output as JSON
     #[arg(long)]
     pub json: bool,
+    /// Emit compact JSON (no whitespace / indentation). Has no effect
+    /// without `--json`.
+    #[arg(long, requires = "json")]
+    pub compact: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -2611,6 +2615,21 @@ mod tests {
         } else {
             panic!("expected Inspect command");
         }
+    }
+
+    #[test]
+    fn profile_validate_compact_requires_json_flag() {
+        let bare = Cli::try_parse_from(["nono", "profile", "validate", "/tmp/p.json", "--compact"]);
+        assert!(bare.is_err(), "--compact without --json must be rejected");
+        let with_json = Cli::try_parse_from([
+            "nono",
+            "profile",
+            "validate",
+            "/tmp/p.json",
+            "--json",
+            "--compact",
+        ]);
+        assert!(with_json.is_ok(), "--json --compact must parse");
     }
 
     #[test]

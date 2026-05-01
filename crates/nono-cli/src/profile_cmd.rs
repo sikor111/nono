@@ -2273,7 +2273,12 @@ pub(crate) fn cmd_validate(args: ProfileValidateArgs) -> Result<()> {
             "errors": errors,
             "warnings": warnings,
         });
-        println!("{}", to_json(&val)?);
+        let rendered = if args.compact {
+            to_json_compact(&val)?
+        } else {
+            to_json(&val)?
+        };
+        println!("{rendered}");
         if !errors.is_empty() {
             return Err(NonoError::ProfileParse("validation failed".into()));
         }
@@ -3087,6 +3092,7 @@ mod tests {
         let args = ProfileValidateArgs {
             file: path,
             json: false,
+            compact: false,
         };
         let result = cmd_validate(args);
         assert!(result.is_ok(), "valid profile should pass validation");
@@ -3108,6 +3114,7 @@ mod tests {
         let args = ProfileValidateArgs {
             file: path,
             json: false,
+            compact: false,
         };
         let result = cmd_validate(args);
         assert!(result.is_err(), "invalid group should fail validation");
@@ -3130,6 +3137,7 @@ mod tests {
         let args = ProfileValidateArgs {
             file: path,
             json: false,
+            compact: false,
         };
         let result = cmd_validate(args);
         assert!(
