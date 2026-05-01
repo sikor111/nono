@@ -1,5 +1,71 @@
 # Changelog
 
+## [Unreleased]
+
+### Features
+
+- *(cli)* Add `--dry-run-json` for machine-readable policy preview on
+  `nono run`, `nono shell`, and `nono wrap`. The JSON document carries
+  `schema_version: 1` and 22 keys covering filesystem grants, AF_UNIX
+  sockets, network mode, TCP per-port allowlists, signal / process-info
+  / IPC modes, env-var filter (tagged `inherit_all` vs `restricted`),
+  override-deny paths, network profile, allow-domain list, listen
+  ports, capability elevation, LaunchServices and GPU flags
+- *(why)* Add `--command <NAME>` to query whether a command would be
+  blocked by the resolved policy; suggests `--allow-command <NAME>`
+  when blocked
+- *(why)* Add `--allow-command` and `--block-command` so users can
+  probe command policy ad-hoc without authoring a profile first
+- *(why)* Add `--net <HOST:PORT>` shorthand (handles `[ipv6]:port` and
+  bare host with default port)
+- *(why)* Add `--tcp <PORT>` for per-port TCP allowlist queries —
+  resolves against `localhost_ports` ▶ `tcp_connect_ports` ▶
+  `tcp_bind_ports` ▶ network mode fallback
+- *(ps)* Add `--name`, `--profile`, and `--status` filters with
+  case-insensitive name substring and exact-match profile semantics
+- *(ps)* Add `--exit-code <CODE>` for triaging exited sessions by their
+  exit status (auto-narrows to Exited so `--all` is not required)
+- *(ps)* Add `--since <DURATION>` to filter by start time
+  (`30m`/`2h`/`7d`/`1w`); rejects compound forms and zero-duration
+- *(ps)* Add `--sort started|name|status|profile` and `--reverse` with
+  stable session-id tiebreaks
+- *(ps)* Add `--short` for narrow-terminal output (no ANSI, 4-column
+  layout pipes cleanly into `awk`/`cut`/`column`)
+- *(ps)* Add `--output csv|tsv` with RFC 4180 CSV quoting and TSV
+  backslash escaping; header row always emitted
+- *(prune)* Add `--interactive` Y/N confirmation prompt before deletion
+  (refuses non-TTY stdin to surface the gap explicitly)
+- *(prune)* Add `--age <DURATION>` for finer-grained cutoffs than the
+  legacy days-only `--older-than`
+- *(inspect)* Wire the previously-declared `--events` flag and add
+  `--logs-tail <N>`. JSON mode wraps as
+  `{"session": <record>, "events": [...]}` when `--events` is set
+- *(setup)* Add `--print-paths` listing config / profiles / sessions /
+  trusted-keys / executable filesystem locations
+- *(cli)* Add global `--no-color` flag (overrides `colored`'s
+  auto-detection both ways for deterministic pipeline output)
+- *(run)* Append `nono why --command <NAME> [--profile <P>]` hint to
+  the `BlockedCommand` error reason so users discover the diagnostic
+  flow without leaving the failure message
+
+### Observability
+
+- *(run)* Emit structured `tracing::info!` fields (`program`,
+  `profile`, `fs_caps`, `unix_socket_caps`, `network_mode`,
+  `blocked_commands`, `secrets`, `rollback`, `proxy`, `strategy`,
+  `threading`) so `RUST_LOG=info` produces greppable `key=value` output
+
+### Documentation
+
+- *(sandbox/linux)* Correct misleading SAFETY comment on the `OpenHow
+  read_unaligned` call: `[u8; N]` has alignment 1, which is exactly
+  why `read_unaligned` is required
+
+### Refactoring
+
+- *(policy)* Drop stale `#[allow(dead_code)]` on `Group::description`
+  (the field is read by `get_sensitive_paths`)
+
 ## [0.44.0] - 2026-04-29
 
 ### Bug Fixes
