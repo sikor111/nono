@@ -328,6 +328,18 @@
   comparisons. Conflicts with the structured output modes
   (`--json` / `--compact` / `--field` / `--events` /
   `--quiet`)
+- *(inspect)* `--watch <DURATION>` and `--max-iterations <N>`
+  bring the same top-like polling pattern `nono ps` already
+  has to a single session — useful for tracking a still-
+  running session in real time. Each tick re-loads the
+  record so `Status` / `Attached` / `Exit code` and the
+  optional events tail update as the underlying session
+  evolves. `--max-iterations` (requires `--watch`) caps the
+  loop for CI smoke tests; trailing inter-frame sleep is
+  skipped after the last frame. Pairs with `--events` /
+  `--logs-tail` for live event-log tailing. Conflicts with
+  the single-shot structured-output modes (`--json` /
+  `--compact` / `--field` / `--quiet` / `--raw`)
 
 ### Observability
 
