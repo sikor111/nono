@@ -301,6 +301,13 @@
   (the failure identity is the name itself; the JSON / human
   paths surface error details). Conflicts with `--json` /
   `--compact` / `--field`
+- *(profile)* `groups --names-only` is symmetric to
+  `list --names-only`: emits one group name per line, sorted,
+  with the platform filter applied the same way the JSON /
+  human modes use. Honored only in list mode (no positional
+  group name); detail-mode misuse errors at runtime with a
+  "drop the group name argument" hint. Conflicts with the
+  same output flags as `list --names-only`
 
 ### Observability
 
