@@ -865,7 +865,7 @@ pub struct ProfileListArgs {
     pub names_only: bool,
 }
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 pub struct ProfileShowArgs {
     /// Profile name or path
     pub profile: String,
@@ -893,6 +893,23 @@ pub struct ProfileShowArgs {
     /// not honored when `--format manifest` is set.
     #[arg(long, value_name = "PATH", requires = "json")]
     pub field: Option<String>,
+    /// Refresh the profile output every DURATION (e.g. `2s`,
+    /// `5s`, `1m`) — top-like polling. Useful when editing a
+    /// profile JSON file and watching it re-resolve as the
+    /// inheritance chain changes. Exit with Ctrl-C. Conflicts
+    /// with the single-shot structured-output modes (`--json` /
+    /// `--compact` / `--field`).
+    #[arg(
+        long,
+        value_name = "DURATION",
+        conflicts_with_all = &["json", "compact", "field"],
+    )]
+    pub watch: Option<String>,
+    /// Cap `--watch` at N frames before exiting. Symmetric to
+    /// `nono inspect --max-iterations`. Requires `--watch`; has
+    /// no effect on a single-shot show.
+    #[arg(long, value_name = "N", requires = "watch")]
+    pub max_iterations: Option<u64>,
 }
 
 #[derive(clap::ValueEnum, Clone, Debug)]
@@ -3609,6 +3626,79 @@ mod tests {
             }
         } else {
             panic!("expected Profile");
+        }
+    }
+
+    #[test]
+    fn profile_show_watch_parses_and_conflicts_with_structured_output_modes() {
+        let bare = Cli::try_parse_from(["nono", "profile", "show", "default", "--watch", "5s"])
+            .expect("--watch parses");
+        if let Commands::Profile(args) = bare.command {
+            if let crate::cli::ProfileCommands::Show(show) = args.command {
+                assert_eq!(show.watch.as_deref(), Some("5s"));
+                assert!(show.max_iterations.is_none());
+            } else {
+                panic!("expected Profile::Show");
+            }
+        } else {
+            panic!("expected Profile");
+        }
+
+        let with_cap = Cli::try_parse_from([
+            "nono",
+            "profile",
+            "show",
+            "default",
+            "--watch",
+            "1s",
+            "--max-iterations",
+            "3",
+        ])
+        .expect("watch + max-iterations parses");
+        if let Commands::Profile(args) = with_cap.command {
+            if let crate::cli::ProfileCommands::Show(show) = args.command {
+                assert_eq!(show.max_iterations, Some(3));
+            } else {
+                panic!("expected Profile::Show");
+            }
+        } else {
+            panic!("expected Profile");
+        }
+
+        // --max-iterations without --watch must fail.
+        let bare_max = Cli::try_parse_from([
+            "nono",
+            "profile",
+            "show",
+            "default",
+            "--max-iterations",
+            "5",
+        ]);
+        assert!(bare_max.is_err(), "--max-iterations requires --watch");
+
+        for invocation in [
+            vec![
+                "nono", "profile", "show", "default", "--watch", "1s", "--json",
+            ],
+            vec![
+                "nono",
+                "profile",
+                "show",
+                "default",
+                "--watch",
+                "1s",
+                "--json",
+                "--compact",
+            ],
+            vec![
+                "nono", "profile", "show", "default", "--watch", "1s", "--json", "--field", "name",
+            ],
+        ] {
+            assert!(
+                Cli::try_parse_from(&invocation).is_err(),
+                "{:?}: --watch + structured-output flag must be rejected",
+                invocation
+            );
         }
     }
 

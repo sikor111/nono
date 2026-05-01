@@ -991,6 +991,47 @@ fn print_profile_line(name: &str, result: &Result<Profile>, t: &theme::Theme) {
 // ---------------------------------------------------------------------------
 
 pub(crate) fn cmd_show(args: ProfileShowArgs) -> Result<()> {
+    // `--watch` polls the same profile name repeatedly, so the
+    // user can edit the on-disk JSON and see the rendered
+    // resolution refresh. Conflicts with json/compact/field at
+    // the clap layer, so reaching this branch only ever runs
+    // the human-readable render. Recurse with watch cleared so
+    // the body stays one block and we don't have to
+    // hand-extract the render logic.
+    if let Some(spec) = args.watch.as_deref() {
+        let interval = crate::session_commands::parse_duration_to_secs(spec)?;
+        let dur = std::time::Duration::from_secs(interval);
+        let mut iterations_remaining: Option<u64> = args.max_iterations;
+        loop {
+            print!("\x1b[2J\x1b[H");
+            std::io::Write::flush(&mut std::io::stdout()).ok();
+            println!(
+                "nono profile show {}  -  refreshed {}  (every {}s)",
+                &args.profile,
+                chrono::Local::now().format("%H:%M:%S"),
+                interval,
+            );
+            println!();
+            // Clone the args, drop the watch fields so the body
+            // doesn't recurse infinitely, and let the existing
+            // render run end-to-end. load_profile_no_migrate
+            // re-reads from disk on every call, so the rendered
+            // output reflects the current file state.
+            let mut once = args.clone();
+            once.watch = None;
+            once.max_iterations = None;
+            cmd_show(once)?;
+
+            if let Some(ref mut remaining) = iterations_remaining {
+                *remaining = remaining.saturating_sub(1);
+                if *remaining == 0 {
+                    return Ok(());
+                }
+            }
+            std::thread::sleep(dur);
+        }
+    }
+
     let raw_extends = profile::load_profile_extends(&args.profile);
     let profile = profile::load_profile_no_migrate(&args.profile)?;
 
