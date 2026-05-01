@@ -251,6 +251,14 @@
   `--quiet` doesn't conflate denials with failures. Conflicts
   with `--json` / `--compact` / `--field` (those modes ask
   for output) and `--print-policy` (no verdict to encode)
+- *(ps)* `--quiet` is symmetric for the session list — grep-
+  like exit codes (`0` if at least one session matches the
+  filters, `1` if none) without parsing tabular output.
+  Common shell pattern: `if nono ps --status running --quiet;
+  then echo "have running sessions"; fi`. Conflicts with
+  output-emitting flags (`--json` / `--compact` / `--output`
+  / `--field`) and with `--watch` (interactive loop, not a
+  single check)
 
 ### Observability
 
