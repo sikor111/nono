@@ -92,6 +92,13 @@
   showing near-misses. Honored for `--path` queries; `--json
   --explain` wraps the document as
   `{"result": …, "matches": [...]}`
+- *(why)* `--print-policy` dumps the resolved `CapabilitySet` instead
+  of running a query — useful for "what does `--profile X` actually
+  grant in aggregate?". Reuses the `--dry-run-json` schema (with a
+  `(why)` command placeholder) when paired with `--json`; the
+  human-readable form prints the same table as `--verbose run`.
+  Mutually exclusive with `--path` / `--host` / `--net` / `--tcp` /
+  `--command` so the flag advertises the short-circuit semantics
 
 ### Observability
 
