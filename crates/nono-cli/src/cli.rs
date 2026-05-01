@@ -1618,6 +1618,14 @@ pub struct WhyArgs {
     #[arg(long, requires = "json", help_heading = "OPTIONS")]
     pub compact: bool,
 
+    /// In addition to the verdict, list every capability that covers
+    /// the queried path (longest-prefix first) with a `sufficient?`
+    /// column. Useful for debugging complex profiles where a deny /
+    /// near-miss isn't obvious from the best-match verdict alone.
+    /// Currently honored for `--path` queries only.
+    #[arg(long, help_heading = "OPTIONS")]
+    pub explain: bool,
+
     /// Query current sandbox state (use inside a sandboxed process)
     #[arg(long = "self", help_heading = "OPTIONS")]
     pub self_query: bool,

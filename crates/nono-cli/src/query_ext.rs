@@ -192,6 +192,106 @@ pub fn query_path(
     })
 }
 
+/// One row of the `nono why --explain` table: a capability that covers
+/// the queried path, plus whether it would have been *sufficient* for
+/// the requested access mode (so users can see near-misses).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExplainedMatch {
+    /// Resolved capability path.
+    pub path: String,
+    /// Granted access mode (`read`, `write`, `read+write`).
+    pub access: String,
+    /// Capability source (user / profile / group:<name> / system).
+    pub source: String,
+    /// Whether this capability alone would satisfy the requested
+    /// access mode. `false` rows are near-misses — they cover the
+    /// path but with insufficient access.
+    pub sufficient: bool,
+}
+
+/// Like [`query_path`], but also returns every fs capability that
+/// covers the queried path (sorted longest-prefix-first), so users
+/// running `nono why --explain` can see *all* matches, not just the
+/// best one. The first item of the returned tuple is byte-for-byte
+/// identical to what `query_path` would have returned for the same
+/// inputs — `--explain` is purely additive.
+pub fn query_path_explained(
+    path: &Path,
+    requested: AccessMode,
+    caps: &CapabilitySet,
+    overridden_paths: &[std::path::PathBuf],
+) -> Result<(QueryResult, Vec<ExplainedMatch>)> {
+    let result = query_path(path, requested, caps, overridden_paths)?;
+
+    // Re-canonicalize using the same lenient logic as `query_path` so
+    // the explain pass sees the same "search space" the verdict was
+    // computed against. Returning the raw input path here would cause
+    // the second-pass match list to disagree with the verdict for
+    // symlinked / non-existent inputs.
+    let canonical = canonicalize_for_query(path)?;
+
+    let mut matches: Vec<ExplainedMatch> = caps
+        .fs_capabilities()
+        .iter()
+        .filter(|cap| {
+            if cap.is_file {
+                cap.resolved == canonical
+            } else {
+                canonical.starts_with(&cap.resolved)
+            }
+        })
+        .map(|cap| {
+            let sufficient = matches!(
+                (cap.access, requested),
+                (AccessMode::ReadWrite, _)
+                    | (AccessMode::Read, AccessMode::Read)
+                    | (AccessMode::Write, AccessMode::Write)
+            );
+            ExplainedMatch {
+                path: cap.resolved.display().to_string(),
+                access: cap.access.to_string(),
+                source: cap.source.to_string(),
+                sufficient,
+            }
+        })
+        .collect();
+
+    // Longest-path first so the explainer reads top-down from "most
+    // specific match" to "broadest covering grant" — matches how
+    // `query_path` itself picks a winner.
+    matches.sort_by_key(|m| std::cmp::Reverse(m.path.len()));
+
+    Ok((result, matches))
+}
+
+/// Lenient canonicalization shared by `query_path` and
+/// `query_path_explained`: if the path itself doesn't exist we fall
+/// back to canonicalizing the parent, so a query against a yet-to-be-
+/// created file still resolves against its real directory.
+fn canonicalize_for_query(path: &Path) -> Result<std::path::PathBuf> {
+    if path.exists() {
+        return path
+            .canonicalize()
+            .map_err(|e| NonoError::PathCanonicalization {
+                path: path.to_path_buf(),
+                source: e,
+            });
+    }
+    if let Some(parent) = path.parent() {
+        if parent.exists() {
+            let parent_canonical =
+                parent
+                    .canonicalize()
+                    .map_err(|e| NonoError::PathCanonicalization {
+                        path: parent.to_path_buf(),
+                        source: e,
+                    })?;
+            return Ok(parent_canonical.join(path.file_name().unwrap_or_default()));
+        }
+    }
+    Ok(path.to_path_buf())
+}
+
 /// Parse a `host:port` shorthand for `nono why --net`.
 ///
 /// Accepts:
@@ -719,6 +819,71 @@ mod tests {
             }
             other => panic!("expected allowed, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn query_path_explained_lists_all_covers_with_sufficiency_flags() {
+        // Build a CapabilitySet with two grants on overlapping prefixes:
+        // a Read on the parent dir + a ReadWrite on a subdir. Querying a
+        // file inside the subdir should see BOTH grants in the explain
+        // output, sorted longest-prefix first, with sufficiency flags
+        // matching what `query_path` would have considered.
+        let dir = tempdir().expect("tempdir");
+        let sub = dir.path().join("inner");
+        std::fs::create_dir_all(&sub).expect("create sub");
+        let target = sub.join("file.txt");
+        std::fs::write(&target, "x").expect("write target");
+
+        let mut caps = CapabilitySet::new();
+        caps.add_fs(FsCapability {
+            original: dir.path().to_path_buf(),
+            resolved: dir.path().canonicalize().expect("canon dir"),
+            access: AccessMode::Read,
+            is_file: false,
+            source: CapabilitySource::User,
+        });
+        caps.add_fs(FsCapability {
+            original: sub.clone(),
+            resolved: sub.canonicalize().expect("canon sub"),
+            access: AccessMode::ReadWrite,
+            is_file: false,
+            source: CapabilitySource::User,
+        });
+
+        // Querying for Write access: the broad Read parent is a
+        // near-miss (insufficient), the narrower ReadWrite is sufficient.
+        let (verdict, matches) =
+            query_path_explained(&target, AccessMode::Write, &caps, &[]).expect("query");
+        assert!(matches!(verdict, QueryResult::Allowed { .. }));
+        assert_eq!(matches.len(), 2, "both covers must be listed: {matches:?}");
+
+        // Longest-prefix first ⇒ the inner subdir leads.
+        let canonical_sub = sub.canonicalize().expect("canon sub").display().to_string();
+        let canonical_outer = dir
+            .path()
+            .canonicalize()
+            .expect("canon outer")
+            .display()
+            .to_string();
+        assert_eq!(matches[0].path, canonical_sub);
+        assert!(matches[0].sufficient, "sub is ReadWrite ⇒ sufficient");
+        assert_eq!(matches[1].path, canonical_outer);
+        assert!(
+            !matches[1].sufficient,
+            "outer is Read-only, not sufficient for Write"
+        );
+    }
+
+    #[test]
+    fn query_path_explained_returns_empty_matches_when_nothing_covers() {
+        let caps = CapabilitySet::new();
+        let path = std::path::Path::new("/usr/bin");
+        let (_verdict, matches) =
+            query_path_explained(path, AccessMode::Read, &caps, &[]).expect("query");
+        assert!(
+            matches.is_empty(),
+            "empty caps ⇒ nothing covers ⇒ empty list"
+        );
     }
 
     #[test]

@@ -95,6 +95,10 @@ pub(crate) fn run_why(args: WhyArgs) -> Result<()> {
         (caps, vec![])
     };
 
+    // For `--path --explain` we need the full match list alongside the
+    // verdict; non-path queries fall back to the regular `query_path`/
+    // `query_network`/etc. paths since the explainer is path-specific.
+    let mut explained_matches: Option<Vec<query_ext::ExplainedMatch>> = None;
     let result = if let Some(ref path) = args.path {
         let op = match args.op {
             Some(WhyOp::Read) => AccessMode::Read,
@@ -102,7 +106,14 @@ pub(crate) fn run_why(args: WhyArgs) -> Result<()> {
             Some(WhyOp::ReadWrite) => AccessMode::ReadWrite,
             None => AccessMode::Read,
         };
-        query_path(path, op, &caps, &overridden_paths)?
+        if args.explain {
+            let (verdict, matches) =
+                query_ext::query_path_explained(path, op, &caps, &overridden_paths)?;
+            explained_matches = Some(matches);
+            verdict
+        } else {
+            query_path(path, op, &caps, &overridden_paths)?
+        }
     } else if let Some(ref net) = args.net {
         let (host, port) = query_ext::parse_host_port(net, args.port)?;
         query_network(&host, port, &caps)
@@ -119,16 +130,62 @@ pub(crate) fn run_why(args: WhyArgs) -> Result<()> {
     };
 
     if args.json {
+        // When `--explain` is set alongside `--json`, wrap the document
+        // so consumers get both the verdict and the full match list.
+        // Without `--explain`, the document stays as the bare verdict
+        // for backwards compatibility with existing tooling.
+        let value = match &explained_matches {
+            None => serde_json::to_value(&result),
+            Some(matches) => Ok(serde_json::json!({
+                "result": result,
+                "matches": matches,
+            })),
+        }
+        .map_err(|e| NonoError::ConfigParse(format!("JSON serialization failed: {e}")))?;
         let json = if args.compact {
-            serde_json::to_string(&result)
+            serde_json::to_string(&value)
         } else {
-            serde_json::to_string_pretty(&result)
+            serde_json::to_string_pretty(&value)
         }
         .map_err(|e| NonoError::ConfigParse(format!("JSON serialization failed: {}", e)))?;
         println!("{}", json);
     } else {
         print_result(&result);
+        if let Some(matches) = &explained_matches {
+            println!();
+            print_explained_matches(matches);
+        }
     }
 
     Ok(())
+}
+
+/// Render the `--explain` match list as a small table appended after
+/// the regular verdict. Empty list means "the verdict was not driven
+/// by a covering capability" (e.g. sensitive_path / network query) —
+/// surface that explicitly so the user knows the explainer ran.
+fn print_explained_matches(matches: &[query_ext::ExplainedMatch]) {
+    println!("All matching capabilities:");
+    if matches.is_empty() {
+        println!("  (no fs capability covers this path)");
+        return;
+    }
+    println!(
+        "  {:<48}  {:<10}  {:<24}  SUFFICIENT?",
+        "PATH", "ACCESS", "SOURCE"
+    );
+    for m in matches {
+        let path = if m.path.len() > 48 {
+            format!("…{}", &m.path[m.path.len() - 47..])
+        } else {
+            m.path.clone()
+        };
+        println!(
+            "  {:<48}  {:<10}  {:<24}  {}",
+            path,
+            m.access,
+            m.source,
+            if m.sufficient { "yes" } else { "no" },
+        );
+    }
 }
