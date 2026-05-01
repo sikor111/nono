@@ -517,6 +517,17 @@ pub(crate) fn cmd_groups(args: ProfileGroupsArgs) -> Result<()> {
                         .to_string(),
                 ));
             }
+            // `--search` is also list-shape only — the detail view
+            // is already a single document so filtering it is a
+            // no-op or self-contradiction depending on whether the
+            // group's content happens to match.
+            if args.search.is_some() {
+                return Err(NonoError::ProfileParse(
+                    "--search is only honored when listing groups; \
+                     drop the group name argument to use it"
+                        .to_string(),
+                ));
+            }
             cmd_groups_detail(&pol, &name, args.json, args.compact, args.field.as_deref())
         }
         None => cmd_groups_list(
@@ -526,6 +537,7 @@ pub(crate) fn cmd_groups(args: ProfileGroupsArgs) -> Result<()> {
             args.all_platforms,
             args.field.as_deref(),
             args.names_only,
+            args.search.as_deref(),
         ),
     }
 }
@@ -537,12 +549,48 @@ fn cmd_groups_list(
     all_platforms: bool,
     field: Option<&str>,
     names_only: bool,
+    search: Option<&str>,
 ) -> Result<()> {
     let mut groups: Vec<(&String, &Group)> = pol.groups.iter().collect();
     groups.sort_by_key(|(name, _)| name.as_str());
 
     if !all_platforms {
         groups.retain(|(_, g)| policy::group_matches_platform(g));
+    }
+
+    // `--search` is human-only (rejected in clap if combined with
+    // `--json` / `--compact` / `--field`). It composes with
+    // `--names-only` to give shell-loop ergonomics.
+    if let Some(needle) = search {
+        let hits = search_groups(&groups, needle);
+        if hits.is_empty() {
+            return Err(NonoError::ProfileParse(format!(
+                "no groups match {needle:?}. Use `nono profile groups` \
+                 to see all groups"
+            )));
+        }
+        if names_only {
+            for (name, _, _) in &hits {
+                println!("{name}");
+            }
+            return Ok(());
+        }
+        let t = theme::current();
+        println!("{}: {} groups matching {:?}", prefix(), hits.len(), needle);
+        println!();
+        for (name, group, where_matched) in &hits {
+            let platform = group.platform.as_deref().unwrap_or("cross-platform");
+            let required = if group.required { "  required" } else { "" };
+            println!(
+                "  {:<36} {:<42} {}{}",
+                theme::fg(name, t.text).bold(),
+                theme::fg(&group.description, t.subtext),
+                theme::fg(platform, t.overlay),
+                theme::fg(required, t.yellow),
+            );
+            println!("    [matched in: {}]", where_matched.join(", "));
+        }
+        return Ok(());
     }
 
     if names_only {
@@ -822,6 +870,59 @@ fn expand_paths_json(paths: &[String]) -> serde_json::Value {
         })
         .collect();
     serde_json::Value::Array(arr)
+}
+
+/// Filter the (already-platform-filtered) group list to the
+/// entries whose name, description, or any path / command in
+/// `allow.{read,write,readwrite}`, `deny.access`, or
+/// `deny.commands` contains `needle` as a case-insensitive
+/// substring. Returns each match alongside the list of field
+/// labels that carried a hit (in a stable order so output is
+/// deterministic for tests and easier to skim). Pure helper so
+/// the matching logic is unit-testable without rebuilding the
+/// embedded policy.
+fn search_groups<'a>(
+    groups: &[(&'a String, &'a Group)],
+    needle: &str,
+) -> Vec<(&'a String, &'a Group, Vec<&'static str>)> {
+    let q = needle.to_lowercase();
+    let mut out: Vec<(&'a String, &'a Group, Vec<&'static str>)> = Vec::new();
+    for (name, group) in groups {
+        let mut where_matched: Vec<&'static str> = Vec::new();
+        if name.to_lowercase().contains(&q) {
+            where_matched.push("name");
+        }
+        if group.description.to_lowercase().contains(&q) {
+            where_matched.push("description");
+        }
+        if let Some(ref allow) = group.allow {
+            if allow.read.iter().any(|p| p.to_lowercase().contains(&q)) {
+                where_matched.push("allow.read");
+            }
+            if allow.write.iter().any(|p| p.to_lowercase().contains(&q)) {
+                where_matched.push("allow.write");
+            }
+            if allow
+                .readwrite
+                .iter()
+                .any(|p| p.to_lowercase().contains(&q))
+            {
+                where_matched.push("allow.readwrite");
+            }
+        }
+        if let Some(ref deny) = group.deny {
+            if deny.access.iter().any(|p| p.to_lowercase().contains(&q)) {
+                where_matched.push("deny.access");
+            }
+            if deny.commands.iter().any(|c| c.to_lowercase().contains(&q)) {
+                where_matched.push("deny.commands");
+            }
+        }
+        if !where_matched.is_empty() {
+            out.push((*name, *group, where_matched));
+        }
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -3608,5 +3709,85 @@ Second body.
         assert!(find_guide_section(&sections, "1.").is_some());
         // Miss returns None so the caller can surface a hint.
         assert!(find_guide_section(&sections, "nonexistent").is_none());
+    }
+
+    fn make_group(
+        description: &str,
+        platform: Option<&str>,
+        allow_read: Vec<&str>,
+        deny_commands: Vec<&str>,
+    ) -> Group {
+        Group {
+            description: description.to_string(),
+            platform: platform.map(|s| s.to_string()),
+            required: false,
+            allow: Some(AllowOps {
+                read: allow_read.into_iter().map(|s| s.to_string()).collect(),
+                write: Vec::new(),
+                readwrite: Vec::new(),
+            }),
+            deny: Some(DenyOps {
+                access: Vec::new(),
+                unlink: false,
+                unlink_override_for_user_writable: false,
+                commands: deny_commands.into_iter().map(|s| s.to_string()).collect(),
+            }),
+            symlink_pairs: None,
+        }
+    }
+
+    #[test]
+    fn search_groups_matches_across_name_description_paths_and_commands() {
+        // Each group hits a different field — the test verifies
+        // every documented match path actually wires up.
+        let g_name = make_group("desc", None, vec![], vec![]);
+        let g_desc = make_group("touches /etc paths", None, vec![], vec![]);
+        let g_path = make_group("desc", None, vec!["/etc/hosts"], vec![]);
+        let g_cmd = make_group("desc", None, vec![], vec!["fetch-etc"]);
+        let names = [
+            "etc_in_name".to_string(),
+            "g_desc".to_string(),
+            "g_path".to_string(),
+            "g_cmd".to_string(),
+        ];
+        let groups: Vec<(&String, &Group)> = vec![
+            (&names[0], &g_name),
+            (&names[1], &g_desc),
+            (&names[2], &g_path),
+            (&names[3], &g_cmd),
+        ];
+        let hits = search_groups(&groups, "etc");
+        assert_eq!(hits.len(), 4);
+        let by_name: std::collections::HashMap<&str, &Vec<&'static str>> =
+            hits.iter().map(|(n, _, w)| (n.as_str(), w)).collect();
+        assert_eq!(by_name["etc_in_name"], &vec!["name"]);
+        assert_eq!(by_name["g_desc"], &vec!["description"]);
+        assert_eq!(by_name["g_path"], &vec!["allow.read"]);
+        assert_eq!(by_name["g_cmd"], &vec!["deny.commands"]);
+    }
+
+    #[test]
+    fn search_groups_is_case_insensitive_and_returns_empty_on_miss() {
+        let g = make_group("HTTPS endpoints", None, vec!["/Users/Foo"], vec![]);
+        let name = "ssl_group".to_string();
+        let groups: Vec<(&String, &Group)> = vec![(&name, &g)];
+        // Mixed-case needle hits both lowercase and uppercase data.
+        assert_eq!(search_groups(&groups, "https").len(), 1);
+        assert_eq!(search_groups(&groups, "users/foo").len(), 1);
+        // Genuine miss returns empty so the caller surfaces a hint.
+        assert!(search_groups(&groups, "nonexistent_xyz").is_empty());
+    }
+
+    #[test]
+    fn search_groups_records_every_matching_field_for_one_group() {
+        // A single group with the needle landing in name, description,
+        // and a path must report all three labels in deterministic
+        // order (name → description → allow.read).
+        let g = make_group("etc reference", None, vec!["/etc/passwd"], vec![]);
+        let name = "etc_group".to_string();
+        let groups: Vec<(&String, &Group)> = vec![(&name, &g)];
+        let hits = search_groups(&groups, "etc");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].2, vec!["name", "description", "allow.read"]);
     }
 }

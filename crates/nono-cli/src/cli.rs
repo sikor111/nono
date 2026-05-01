@@ -1043,6 +1043,27 @@ pub struct ProfileGroupsArgs {
     /// `--field`).
     #[arg(long, conflicts_with_all = &["json", "compact", "field"])]
     pub names_only: bool,
+
+    /// Filter the group list to those that match a keyword as a
+    /// case-insensitive substring against name, description, and
+    /// every path / command in `allow.{read,write,readwrite}`,
+    /// `deny.access`, and `deny.commands`. Each surviving group
+    /// is annotated with `[matched in: <fields>]` so it is clear
+    /// which field carried the hit. Symmetric to `profile guide
+    /// --search`. Combines naturally with `--names-only` for
+    /// shell-loop ergonomics: `for g in $(nono profile groups
+    /// --search etc --names-only); do …; done`. Only honored in
+    /// list mode (the per-group detail view is already a single
+    /// document — drop the group-name argument to use it).
+    /// Conflicts with output-emitting flags (`--json` /
+    /// `--compact` / `--field`) — same convention as `guide
+    /// --search`.
+    #[arg(
+        long,
+        value_name = "KEYWORD",
+        conflicts_with_all = &["json", "compact", "field"],
+    )]
+    pub search: Option<String>,
 }
 
 #[derive(Parser, Debug, Clone, Default)]
@@ -4146,6 +4167,70 @@ mod tests {
             assert!(
                 Cli::try_parse_from(&invocation).is_err(),
                 "{invocation:?}: --search + display-mode flag must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn profile_groups_search_parses_and_conflicts_with_output_modes() {
+        // --search filters the group list and emits a human-only
+        // render with `[matched in: …]` annotations. Combining it
+        // with structured-output flags would be contradictory so
+        // clap rejects.
+        let bare = Cli::try_parse_from(["nono", "profile", "groups", "--search", "etc"])
+            .expect("--search parses");
+        if let Commands::Profile(args) = bare.command {
+            if let crate::cli::ProfileCommands::Groups(g) = args.command {
+                assert_eq!(g.search.as_deref(), Some("etc"));
+                assert!(!g.names_only);
+                assert!(g.name.is_none());
+            } else {
+                panic!("expected Profile::Groups");
+            }
+        } else {
+            panic!("expected Profile");
+        }
+
+        // --search must compose with --names-only — that's the
+        // shell-loop ergonomic ("filter then names").
+        let combo = Cli::try_parse_from([
+            "nono",
+            "profile",
+            "groups",
+            "--search",
+            "etc",
+            "--names-only",
+        ])
+        .expect("--search + --names-only must compose");
+        if let Commands::Profile(args) = combo.command {
+            if let crate::cli::ProfileCommands::Groups(g) = args.command {
+                assert_eq!(g.search.as_deref(), Some("etc"));
+                assert!(g.names_only);
+            } else {
+                panic!("expected Profile::Groups");
+            }
+        } else {
+            panic!("expected Profile");
+        }
+
+        for invocation in [
+            vec!["nono", "profile", "groups", "--search", "etc", "--json"],
+            vec![
+                "nono",
+                "profile",
+                "groups",
+                "--search",
+                "etc",
+                "--json",
+                "--compact",
+            ],
+            vec![
+                "nono", "profile", "groups", "--search", "etc", "--json", "--field", "/0/name",
+            ],
+        ] {
+            assert!(
+                Cli::try_parse_from(&invocation).is_err(),
+                "{invocation:?}: --search + structured-output flag must be rejected"
             );
         }
     }
