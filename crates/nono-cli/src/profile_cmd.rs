@@ -31,6 +31,42 @@ fn to_json_compact(val: &serde_json::Value) -> Result<String> {
         .map_err(|e| NonoError::ProfileParse(format!("JSON serialization failed: {e}")))
 }
 
+/// Extract a single field from a profile JSON document, formatted for
+/// shell consumption. Mirrors `jq -r` semantics: primitives render
+/// without their JSON quotes (so `$(nono profile show … --field name)`
+/// captures the bare string), while composites render as JSON honoring
+/// `--compact`. The `field` argument accepts either a top-level key
+/// (`network`) or a `/`-prefixed JSON Pointer (`/security/groups/0`).
+///
+/// Returns a `ProfileParse` error when the path resolves to nothing —
+/// silent fallback would let typos sail through and produce empty
+/// output that's hard to distinguish from a legitimately empty value.
+fn extract_field_output(value: &serde_json::Value, field: &str, compact: bool) -> Result<String> {
+    let pointer = if field.starts_with('/') {
+        field.to_string()
+    } else {
+        format!("/{field}")
+    };
+    let target = value.pointer(&pointer).ok_or_else(|| {
+        NonoError::ProfileParse(format!(
+            "field {field:?} not found in profile JSON \
+             (use a top-level key or a JSON-Pointer path like /security/groups/0)"
+        ))
+    })?;
+    Ok(match target {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::Null => "null".to_string(),
+        composite => if compact {
+            serde_json::to_string(composite)
+        } else {
+            serde_json::to_string_pretty(composite)
+        }
+        .map_err(|e| NonoError::ProfileParse(format!("JSON serialization failed: {e}")))?,
+    })
+}
+
 /// Prefix used for all profile command output
 fn prefix() -> colored::ColoredString {
     let t = theme::current();
@@ -844,6 +880,15 @@ pub(crate) fn cmd_show(args: ProfileShowArgs) -> Result<()> {
 
     if args.json {
         let val = profile_to_json(&args.profile, &profile, &raw_extends);
+        if let Some(ref field) = args.field {
+            // Field extraction short-circuits the full-document render
+            // — we want the raw value, not the document with one key
+            // highlighted. `--compact` still controls how composite
+            // sub-values get serialized.
+            let extracted = extract_field_output(&val, field, args.compact)?;
+            println!("{extracted}");
+            return Ok(());
+        }
         let rendered = if args.compact {
             to_json_compact(&val)?
         } else {
@@ -3143,6 +3188,71 @@ mod tests {
         assert!(
             result.is_err(),
             "excluding required group should fail validation"
+        );
+    }
+
+    #[test]
+    fn extract_field_output_unwraps_top_level_string_without_quotes() {
+        // The whole point of this helper is shell-friendly capture:
+        // `name=$(nono profile show … --field name --json)` should
+        // get the bare profile name, not `"default"` with literal
+        // quotes. A regression here would silently wedge any user
+        // script that expects unquoted values.
+        let val = serde_json::json!({"name": "default", "extends": null});
+        let out = extract_field_output(&val, "name", false).expect("string field");
+        assert_eq!(out, "default", "string primitive must come back unquoted");
+    }
+
+    #[test]
+    fn extract_field_output_emits_null_literal_for_null_field() {
+        let val = serde_json::json!({"extends": null});
+        let out = extract_field_output(&val, "extends", false).expect("null field");
+        assert_eq!(out, "null");
+    }
+
+    #[test]
+    fn extract_field_output_serializes_arrays_and_objects() {
+        // Composites can't be unquoted meaningfully — they go through
+        // serde so callers can pipe into `jq -c`. `--compact` must be
+        // honored so the streaming-friendly form is reachable.
+        let val = serde_json::json!({"groups": ["a", "b"], "obj": {"k": 1}});
+        let pretty = extract_field_output(&val, "groups", false).expect("array pretty");
+        assert!(
+            pretty.contains('\n'),
+            "pretty form is multi-line: {pretty:?}"
+        );
+        let compact = extract_field_output(&val, "groups", true).expect("array compact");
+        assert_eq!(compact, "[\"a\",\"b\"]");
+    }
+
+    #[test]
+    fn extract_field_output_supports_json_pointer_paths() {
+        // Top-level keys are sugar; the underlying mechanism is JSON
+        // Pointer so users can reach nested values like
+        // `/security/groups/0` without piping through jq.
+        let val = serde_json::json!({
+            "security": {"groups": ["base", "system_read"]}
+        });
+        let out = extract_field_output(&val, "/security/groups/0", false).expect("pointer");
+        assert_eq!(out, "base");
+    }
+
+    #[test]
+    fn extract_field_output_errors_on_missing_field_with_helpful_message() {
+        // Silent fallback to empty string would be the obvious bug —
+        // user wouldn't know whether the field is empty or just typo'd.
+        // Surface as a NonoError instead.
+        let val = serde_json::json!({"name": "default"});
+        let err = extract_field_output(&val, "totally_not_a_field", false)
+            .expect_err("missing field must error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("totally_not_a_field"),
+            "error message names the missing field: {msg}"
+        );
+        assert!(
+            msg.contains("JSON-Pointer") || msg.contains("top-level key"),
+            "error hints at the pointer-path fallback: {msg}"
         );
     }
 }

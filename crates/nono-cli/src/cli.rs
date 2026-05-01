@@ -813,6 +813,15 @@ pub struct ProfileShowArgs {
     /// Output format: 'profile' (default) or 'manifest' (capability manifest JSON)
     #[arg(long, value_enum, value_name = "FORMAT")]
     pub format: Option<ProfileShowFormat>,
+    /// Extract a single field from the JSON profile output instead of
+    /// emitting the whole document — `jq -r`-lite for shell scripts.
+    /// Accepts a top-level key (`network`) or a JSON Pointer path
+    /// (`/security/groups/0`). String / number / bool / null primitives
+    /// are emitted raw (no surrounding quotes); objects / arrays still
+    /// render as JSON, honoring `--compact`. Requires `--json` and is
+    /// not honored when `--format manifest` is set.
+    #[arg(long, value_name = "PATH", requires = "json")]
+    pub field: Option<String>,
 }
 
 #[derive(clap::ValueEnum, Clone, Debug)]
@@ -2750,6 +2759,52 @@ mod tests {
             if let crate::cli::ProfileCommands::Show(show) = args.command {
                 assert!(show.json);
                 assert!(show.compact);
+            } else {
+                panic!("expected Profile::Show");
+            }
+        } else {
+            panic!("expected Profile");
+        }
+    }
+
+    #[test]
+    fn profile_show_field_requires_json_and_parses_path_forms() {
+        // `--field` without `--json` is meaningless (the human-readable
+        // form has no JSON document to navigate), so clap should reject
+        // it. Same pattern as `--compact requires json`.
+        let bare = Cli::try_parse_from(["nono", "profile", "show", "default", "--field", "name"]);
+        assert!(bare.is_err(), "--field without --json must fail to parse");
+
+        // Top-level key form: `--field name`.
+        let with_key = Cli::try_parse_from([
+            "nono", "profile", "show", "default", "--json", "--field", "name",
+        ])
+        .expect("top-level key parses");
+        if let Commands::Profile(args) = with_key.command {
+            if let crate::cli::ProfileCommands::Show(show) = args.command {
+                assert_eq!(show.field.as_deref(), Some("name"));
+            } else {
+                panic!("expected Profile::Show");
+            }
+        } else {
+            panic!("expected Profile");
+        }
+
+        // Pointer-path form: `--field /security/groups/0`. clap doesn't
+        // need to validate the path syntax — that's the helper's job.
+        let with_ptr = Cli::try_parse_from([
+            "nono",
+            "profile",
+            "show",
+            "default",
+            "--json",
+            "--field",
+            "/security/groups/0",
+        ])
+        .expect("pointer path parses");
+        if let Commands::Profile(args) = with_ptr.command {
+            if let crate::cli::ProfileCommands::Show(show) = args.command {
+                assert_eq!(show.field.as_deref(), Some("/security/groups/0"));
             } else {
                 panic!("expected Profile::Show");
             }
