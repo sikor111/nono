@@ -259,6 +259,15 @@
   output-emitting flags (`--json` / `--compact` / `--output`
   / `--field`) and with `--watch` (interactive loop, not a
   single check)
+- *(profile)* `diff --quiet` is the third `--quiet` surface,
+  for CI drift detection: `0` if the two profiles serialize
+  to identical JSON, `1` otherwise. Common shell pattern:
+  `if ! nono profile diff golden.json shipped.json --quiet;
+  then echo "drift detected"; exit 1; fi`. Equality goes
+  through canonical `serde_json` Value comparison so the
+  semantics stay aligned with what the human and JSON diff
+  renderers operate on. Conflicts with `--json` / `--compact`
+  / `--field`
 
 ### Observability
 
