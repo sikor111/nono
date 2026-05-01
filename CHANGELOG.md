@@ -118,6 +118,24 @@
   argv is what you're actually trying to investigate. Tabular output
   formats (`csv` / `tsv` / `ndjson` / `json`) already emit the full
   command and ignore the flag
+- *(profile)* `show --field <PATH>` extracts a single field from
+  the JSON output — `jq -r`-lite for shell scripts. Accepts either
+  a top-level key (`name`) or a JSON Pointer path
+  (`/security/groups/0`). Primitives render raw (no JSON quotes)
+  for direct shell capture; composites render as JSON honoring
+  `--compact`. Missing fields raise a `ProfileParse` error rather
+  than silently emitting nothing
+- *(why)* `--explain` extended to `--command` queries: lists every
+  entry in `allowed_commands` / `blocked_commands` with a
+  `matches?` column so users see the full configured policy, not
+  just the rule that drove the verdict. Match comparison uses the
+  basename so `/bin/rm` and `rm` resolve identically
+- *(why)* `--explain` extended to `--tcp` / `--tcp-bind` queries:
+  surfaces every port from every configured allowlist
+  (`localhost_ports`, `tcp_connect_ports`, `tcp_bind_ports`) with
+  a `matches?` column. `--tcp-bind --explain` intentionally hides
+  `tcp_connect_ports` rows so the bind-only contract carries
+  through to the explainer too
 
 ### Observability
 
