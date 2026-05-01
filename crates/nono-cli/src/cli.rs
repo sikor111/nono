@@ -2096,6 +2096,25 @@ pub enum PsOutputFormat {
     Ndjson,
 }
 
+/// Selectable columns for the human-readable `nono ps` table. The
+/// canonical render in the default table (and the order users get
+/// when they don't pass `--columns`) is exactly the variant order
+/// declared here. JSON / CSV / TSV / NDJSON outputs always emit the
+/// full set and ignore this knob — those formats have to keep a
+/// stable schema for downstream tooling.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[clap(rename_all = "lowercase")]
+pub enum PsColumn {
+    Session,
+    Name,
+    Status,
+    Attach,
+    Pid,
+    Uptime,
+    Profile,
+    Command,
+}
+
 /// Header style for the human-readable `nono ps` table.
 ///
 /// Only applies to the default and `--short` table renders — the
@@ -2208,6 +2227,23 @@ pub struct PsArgs {
     /// outputs already emit the full command and ignore this flag.
     #[arg(long)]
     pub no_truncate: bool,
+
+    /// Comma-separated list of columns to render in the default
+    /// human-readable table — `session,name,status,attach,pid,uptime,
+    /// profile,command`. Pass any subset to narrow the output (e.g.
+    /// `--columns session,status,command` for triage). Empty / unset
+    /// means the canonical full set in the order above. Conflicts
+    /// with `--short` (which has its own fixed 4-column subset). The
+    /// machine-readable outputs (`--json`, `--output csv|tsv|ndjson`)
+    /// always emit the full schema and ignore this knob.
+    #[arg(
+        long,
+        value_enum,
+        value_delimiter = ',',
+        value_name = "LIST",
+        conflicts_with = "short"
+    )]
+    pub columns: Vec<PsColumn>,
 }
 
 #[derive(Parser, Debug)]
@@ -3047,6 +3083,42 @@ mod tests {
             with_output.is_err(),
             "--watch + --output must conflict — interactive mode vs batch render"
         );
+    }
+
+    #[test]
+    fn ps_columns_parses_comma_list_and_conflicts_with_short() {
+        // Empty default — clap leaves the Vec untouched when the
+        // flag isn't passed. The runtime treats empty as "all".
+        let bare = Cli::try_parse_from(["nono", "ps"]).expect("bare ps parses");
+        if let Commands::Ps(args) = bare.command {
+            assert!(args.columns.is_empty());
+        } else {
+            panic!("expected Ps");
+        }
+
+        // Comma-delimited list parses into the right enum variants
+        // in the user-supplied order. Order matters — iter 56's
+        // contract is that --columns drives both the column SET
+        // and the column ORDER.
+        let parsed = Cli::try_parse_from(["nono", "ps", "--columns", "command,session,status"])
+            .expect("comma list parses");
+        if let Commands::Ps(args) = parsed.command {
+            assert_eq!(
+                args.columns,
+                vec![PsColumn::Command, PsColumn::Session, PsColumn::Status]
+            );
+        } else {
+            panic!("expected Ps");
+        }
+
+        // Invalid value — clap rejects at parse, no silent fallback.
+        assert!(Cli::try_parse_from(["nono", "ps", "--columns", "session,bogus"]).is_err());
+
+        // Conflict with --short. Both control which columns get
+        // rendered; combining them would force one to win silently,
+        // so clap rejects up front.
+        let conflict = Cli::try_parse_from(["nono", "ps", "--columns", "session", "--short"]);
+        assert!(conflict.is_err(), "--columns + --short must conflict");
     }
 
     #[test]

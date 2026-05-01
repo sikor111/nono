@@ -4,7 +4,7 @@
 //! `nono inspect`, and `nono prune`.
 
 use crate::cli::{
-    AttachArgs, DetachArgs, InspectArgs, LogsArgs, PruneArgs, PsArgs, PsHeaderFormat,
+    AttachArgs, DetachArgs, InspectArgs, LogsArgs, PruneArgs, PsArgs, PsColumn, PsHeaderFormat,
     PsOutputFormat, PsSortBy, PsStatusFilter, StopArgs,
 };
 use crate::command_display::{format_command_line, truncate_command};
@@ -71,14 +71,10 @@ fn format_watch_banner(now: chrono::DateTime<chrono::Local>, interval_secs: u64)
     )
 }
 
-/// Sum of column widths + interleaved single spaces for the default
-/// table layout (`{:<16} {:<12} {:<12} {:<12} {:<8} {:<10} {:<14}` plus
-/// a trailing `COMMAND` budget). Used as the divider width so the line
-/// reaches the start of the variable-length COMMAND column.
-const PS_DEFAULT_TABLE_WIDTH: usize =
-    16 + 1 + 12 + 1 + 12 + 1 + 12 + 1 + 8 + 1 + 10 + 1 + 14 + 1 + "COMMAND".len();
-
-/// Same idea for the `--short` layout: 3 padded columns + COMMAND.
+/// Divider width for the `--short` layout: 3 padded columns +
+/// COMMAND. The default layout no longer has a constant — its width
+/// is computed dynamically from the rendered header so `--columns`
+/// subsets get the right divider length without per-layout constants.
 const PS_SHORT_TABLE_WIDTH: usize = 16 + 1 + 12 + 1 + 12 + 1 + "COMMAND".len();
 
 /// Render the table header — column titles followed by a divider —
@@ -112,6 +108,124 @@ fn render_ps_command(command: &[String], no_truncate: bool, max_len: usize) -> S
         format_command_line(command)
     } else {
         truncate_command(command, max_len)
+    }
+}
+
+/// Canonical column order — what users get when they don't pass
+/// `--columns`. Matches the `PsColumn` variant order exactly; bumping
+/// either side without the other would silently reorder the default
+/// table, which is the obvious user-visible regression.
+const DEFAULT_PS_COLUMNS: &[PsColumn] = &[
+    PsColumn::Session,
+    PsColumn::Name,
+    PsColumn::Status,
+    PsColumn::Attach,
+    PsColumn::Pid,
+    PsColumn::Uptime,
+    PsColumn::Profile,
+    PsColumn::Command,
+];
+
+/// Header text + padded width for each column. The COMMAND column
+/// has width 0 because its rendered cell is variable-length (driven
+/// by `--no-truncate` and the 40-char cap); padding it would just
+/// add trailing spaces with no benefit.
+fn column_meta(col: PsColumn) -> (&'static str, usize) {
+    match col {
+        PsColumn::Session => ("SESSION", 16),
+        PsColumn::Name => ("NAME", 12),
+        PsColumn::Status => ("STATUS", 12),
+        PsColumn::Attach => ("ATTACH", 12),
+        PsColumn::Pid => ("PID", 8),
+        PsColumn::Uptime => ("UPTIME", 10),
+        PsColumn::Profile => ("PROFILE", 14),
+        PsColumn::Command => ("COMMAND", 0),
+    }
+}
+
+/// Render the column-title row for the selected columns. Joining with
+/// a single space matches the row builder so header and cells align.
+fn render_default_header_row(columns: &[PsColumn]) -> String {
+    columns
+        .iter()
+        .map(|&col| {
+            let (header, width) = column_meta(col);
+            if width == 0 {
+                header.to_string()
+            } else {
+                format!("{header:<width$}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Render a single data row across the selected columns, joining
+/// cells with one space. Per-cell rendering is delegated to
+/// `render_default_cell` so the per-column logic (ANSI colors,
+/// command truncation, status formatting) lives in one place.
+fn render_default_data_row(
+    session: &SessionRecord,
+    columns: &[PsColumn],
+    no_truncate: bool,
+) -> String {
+    columns
+        .iter()
+        .map(|&col| render_default_cell(col, session, no_truncate))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Render one cell for the default table. ANSI coloring on the
+/// status / attach cells is preserved across re-orderings — splitting
+/// the loop out shouldn't lose the color attribution that drove the
+/// original verbose format string.
+fn render_default_cell(col: PsColumn, session: &SessionRecord, no_truncate: bool) -> String {
+    match col {
+        PsColumn::Session => format!("{:<16}", session.session_id),
+        PsColumn::Name => format!("{:<12}", session.name.as_deref().unwrap_or("-")),
+        PsColumn::Status => render_status_cell(session, 12),
+        PsColumn::Attach => render_attach_cell(session, 12),
+        PsColumn::Pid => format!("{:<8}", session.child_pid),
+        PsColumn::Uptime => format!("{:<10}", format_uptime(&session.started)),
+        PsColumn::Profile => format!("{:<14}", session.profile.as_deref().unwrap_or("-")),
+        PsColumn::Command => render_ps_command(&session.command, no_truncate, 40),
+    }
+}
+
+/// Render the STATUS cell with status-specific ANSI coloring
+/// (green = running, yellow = paused, red = exited with non-zero).
+fn render_status_cell(session: &SessionRecord, width: usize) -> String {
+    let exit_code = session.exit_code.unwrap_or(-1);
+    let status_text = match session.status {
+        SessionStatus::Running => "running".to_string(),
+        SessionStatus::Paused => "paused".to_string(),
+        SessionStatus::Exited => format!("exited({exit_code})"),
+    };
+    let padded = format!("{status_text:<width$}");
+    match session.status {
+        SessionStatus::Running => padded.green().to_string(),
+        SessionStatus::Paused => padded.yellow().to_string(),
+        SessionStatus::Exited if exit_code != 0 => padded.red().to_string(),
+        _ => padded,
+    }
+}
+
+/// Render the ATTACH cell with attachment-specific coloring.
+/// Exited sessions render `-` (no color) since attachment is moot.
+fn render_attach_cell(session: &SessionRecord, width: usize) -> String {
+    let attach_text = match session.status {
+        SessionStatus::Exited => "-".to_string(),
+        _ => match session.attachment {
+            SessionAttachment::Attached => "attached".to_string(),
+            SessionAttachment::Detached => "detached".to_string(),
+        },
+    };
+    let padded = format!("{attach_text:<width$}");
+    match (&session.status, &session.attachment) {
+        (SessionStatus::Exited, _) => padded,
+        (_, SessionAttachment::Attached) => padded.green().to_string(),
+        (_, SessionAttachment::Detached) => padded.yellow().to_string(),
     }
 }
 
@@ -180,52 +294,31 @@ fn print_ps_table_once(args: &PsArgs) -> Result<()> {
         return Ok(());
     }
 
-    let header = format!(
-        "{:<16} {:<12} {:<12} {:<12} {:<8} {:<10} {:<14} COMMAND",
-        "SESSION", "NAME", "STATUS", "ATTACH", "PID", "UPTIME", "PROFILE"
-    );
-    if let Some(rendered) = render_ps_header(args.header_format, &header, PS_DEFAULT_TABLE_WIDTH) {
+    // `--columns` overrides the default canonical order; an empty
+    // Vec from clap means the user didn't pass the flag, so fall
+    // back to the full set. Storing the resolved view in a local
+    // makes both header and body iterate over the same Vec — a
+    // mismatched order between the two would silently misalign
+    // every row, which is the obvious latent bug.
+    let columns: Vec<PsColumn> = if args.columns.is_empty() {
+        DEFAULT_PS_COLUMNS.to_vec()
+    } else {
+        args.columns.clone()
+    };
+
+    let header = render_default_header_row(&columns);
+    // Divider matches the rendered header's character width — works
+    // uniformly across `--columns` subsets without needing a separate
+    // width constant per layout.
+    let divider_width = header.chars().count();
+    if let Some(rendered) = render_ps_header(args.header_format, &header, divider_width) {
         println!("{rendered}");
     }
 
     for session in &filtered {
-        let name = session.name.as_deref().unwrap_or("-");
-        let col_width = 12;
-        let exit_code = session.exit_code.unwrap_or(-1);
-        let status_text = match session.status {
-            SessionStatus::Running => "running".to_string(),
-            SessionStatus::Paused => "paused".to_string(),
-            SessionStatus::Exited => format!("exited({exit_code})"),
-        };
-        let status_padded = format!("{status_text:<col_width$}");
-        let status = match session.status {
-            SessionStatus::Running => status_padded.green().to_string(),
-            SessionStatus::Paused => status_padded.yellow().to_string(),
-            SessionStatus::Exited if exit_code != 0 => status_padded.red().to_string(),
-            _ => status_padded,
-        };
-
-        let attach_text = match session.status {
-            SessionStatus::Exited => "-".to_string(),
-            _ => match session.attachment {
-                SessionAttachment::Attached => "attached".to_string(),
-                SessionAttachment::Detached => "detached".to_string(),
-            },
-        };
-        let attach_padded = format!("{attach_text:<col_width$}");
-        let attach = match (&session.status, &session.attachment) {
-            (SessionStatus::Exited, _) => attach_padded,
-            (_, SessionAttachment::Attached) => attach_padded.green().to_string(),
-            (_, SessionAttachment::Detached) => attach_padded.yellow().to_string(),
-        };
-        let pid = session.child_pid;
-        let uptime = format_uptime(&session.started);
-        let profile = session.profile.as_deref().unwrap_or("-");
-        let command = render_ps_command(&session.command, args.no_truncate, 40);
-
         println!(
-            "{:<16} {:<12} {} {} {:<8} {:<10} {:<14} {}",
-            session.session_id, name, status, attach, pid, uptime, profile, command
+            "{}",
+            render_default_data_row(session, &columns, args.no_truncate)
         );
     }
 
@@ -1131,6 +1224,7 @@ mod tests {
             compact: false,
             header_format: PsHeaderFormat::Fancy,
             no_truncate: false,
+            columns: Vec::new(),
         }
     }
 
@@ -1764,6 +1858,87 @@ mod tests {
         assert!(
             rendered.contains(&long_arg),
             "no_truncate must include the full long argument verbatim"
+        );
+    }
+
+    #[test]
+    fn default_ps_columns_match_pscolumn_variant_order() {
+        // Backwards-compat guard: the canonical default render order
+        // must equal the variant declaration order. Anyone reordering
+        // PsColumn variants without updating DEFAULT_PS_COLUMNS would
+        // silently rearrange every existing user's `nono ps` output.
+        assert_eq!(
+            DEFAULT_PS_COLUMNS,
+            &[
+                PsColumn::Session,
+                PsColumn::Name,
+                PsColumn::Status,
+                PsColumn::Attach,
+                PsColumn::Pid,
+                PsColumn::Uptime,
+                PsColumn::Profile,
+                PsColumn::Command,
+            ]
+        );
+    }
+
+    #[test]
+    fn render_default_header_row_lays_out_all_columns_with_widths() {
+        let header = render_default_header_row(DEFAULT_PS_COLUMNS);
+        // Each header word still appears (regression guard for typos
+        // or column-removal during refactors).
+        for needle in [
+            "SESSION", "NAME", "STATUS", "ATTACH", "PID", "UPTIME", "PROFILE", "COMMAND",
+        ] {
+            assert!(
+                header.contains(needle),
+                "default header missing {needle}: {header:?}"
+            );
+        }
+        // Column widths from `column_meta` should sum (with separator
+        // spaces and the unpadded COMMAND label) to the total length.
+        let expected_len =
+            16 + 1 + 12 + 1 + 12 + 1 + 12 + 1 + 8 + 1 + 10 + 1 + 14 + 1 + "COMMAND".len();
+        assert_eq!(header.chars().count(), expected_len);
+    }
+
+    #[test]
+    fn render_default_header_row_subset_drops_unselected_columns() {
+        let header = render_default_header_row(&[PsColumn::Session, PsColumn::Command]);
+        assert!(header.contains("SESSION"));
+        assert!(header.contains("COMMAND"));
+        assert!(
+            !header.contains("STATUS"),
+            "subset must not leak columns: {header:?}"
+        );
+        assert!(!header.contains("ATTACH"));
+    }
+
+    #[test]
+    fn render_default_data_row_drops_unselected_cells() {
+        // Triage subset: just session + status + command — what a
+        // user investigating a failing run would actually want.
+        let rec = full_record_for_short_row(
+            "abc12345",
+            Some("triage-1"),
+            SessionStatus::Exited,
+            Some(127),
+            vec!["bash".to_string(), "-lc".to_string(), "boom".to_string()],
+        );
+        let row = render_default_data_row(
+            &rec,
+            &[PsColumn::Session, PsColumn::Status, PsColumn::Command],
+            false,
+        );
+        assert!(row.contains("abc12345"));
+        assert!(row.contains("exited(127)"));
+        assert!(row.contains("bash"));
+        // Unselected columns should not appear; "triage-1" (the name)
+        // is the cleanest probe — every other column has its own
+        // value space that overlaps with status/session text.
+        assert!(
+            !row.contains("triage-1"),
+            "name column must be omitted when not selected: {row:?}"
         );
     }
 
