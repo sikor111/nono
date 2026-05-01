@@ -211,6 +211,20 @@
   reach individual session entries (`/sessions/0/session_id`).
   Lets `count=$(nono prune --dry-run --json --field count)`
   work without external `jq`
+- *(why)* `--self --field <PATH>` closes a small gap in the
+  iter-54 wiring — the `--self-query` NotSandboxed early-exit
+  branch now respects `--field` too. Useful for shell capture:
+  `msg=$(nono why --self --json --field message)` returns
+  the bare "Not running inside a nono sandbox" string instead
+  of the `{status, message}` envelope
+- *(dry-run-schema)* `--field <PATH>` extracts a single field
+  from the schema document. Tenth `--field` surface across
+  the CLI. Common use: assert the schema version in CI without
+  parsing the doc — `[ "$(nono dry-run-schema --field
+  /properties/schema_version/const)" = "1" ]`. Conflicts with
+  `--output` (which writes the full doc); `--compact`
+  controls how composite extracted values render and itself
+  requires `--field`
 
 ### Observability
 
