@@ -36,6 +36,11 @@ pub fn run_ps(args: &PsArgs) -> Result<()> {
     if let Some(spec) = args.watch.as_deref() {
         let interval = parse_duration_to_secs(spec)?;
         let dur = std::time::Duration::from_secs(interval);
+        // `--max-iterations` bounds the loop. None = unlimited
+        // (legacy behavior); Some(n) prints n frames and exits.
+        // Sleep after the last frame is skipped so callers don't
+        // wait an extra interval after the final render.
+        let mut iterations_remaining: Option<u64> = args.max_iterations;
         loop {
             // ANSI clear-screen + home-cursor. Users wired up to a
             // non-ANSI terminal would see escape codes, but `--watch`
@@ -50,6 +55,14 @@ pub fn run_ps(args: &PsArgs) -> Result<()> {
             println!("{}", format_watch_banner(chrono::Local::now(), interval));
             println!();
             print_ps_table_once(args)?;
+
+            if let Some(ref mut remaining) = iterations_remaining {
+                *remaining = remaining.saturating_sub(1);
+                if *remaining == 0 {
+                    return Ok(());
+                }
+            }
+
             std::thread::sleep(dur);
         }
     }
@@ -1240,6 +1253,7 @@ mod tests {
             no_truncate: false,
             columns: Vec::new(),
             field: None,
+            max_iterations: None,
         }
     }
 

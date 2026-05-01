@@ -2253,6 +2253,14 @@ pub struct PsArgs {
     )]
     pub watch: Option<String>,
 
+    /// Cap `--watch` at N frames before exiting. Useful in CI smoke
+    /// tests of watch mode (don't hang forever) and for capturing a
+    /// fixed-size sample without manual Ctrl-C. Requires `--watch`;
+    /// has no effect on a single-shot `ps`. Default (unset) means the
+    /// loop runs until the user interrupts it.
+    #[arg(long, value_name = "N", requires = "watch")]
+    pub max_iterations: Option<u64>,
+
     /// Emit compact JSON (no whitespace / indentation) instead of the
     /// default pretty-printed array. Useful for streaming the session
     /// list into `jq -c`. Has no effect without `--json` — use
@@ -3240,6 +3248,24 @@ mod tests {
             );
         } else {
             panic!("expected DryRunSchema");
+        }
+    }
+
+    #[test]
+    fn ps_max_iterations_requires_watch_and_parses_count() {
+        // Without --watch the flag is meaningless (single-shot ps
+        // doesn't loop), so clap rejects up front.
+        let bare = Cli::try_parse_from(["nono", "ps", "--max-iterations", "5"]);
+        assert!(bare.is_err(), "--max-iterations without --watch must fail");
+
+        let with_watch =
+            Cli::try_parse_from(["nono", "ps", "--watch", "1s", "--max-iterations", "3"])
+                .expect("watch + max-iterations parses");
+        if let Commands::Ps(args) = with_watch.command {
+            assert_eq!(args.max_iterations, Some(3));
+            assert_eq!(args.watch.as_deref(), Some("1s"));
+        } else {
+            panic!("expected Ps");
         }
     }
 
