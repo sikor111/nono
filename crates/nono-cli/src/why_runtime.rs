@@ -18,6 +18,24 @@ pub(crate) fn run_why(args: WhyArgs) -> Result<()> {
                     message: "Not running inside a nono sandbox".to_string(),
                 };
                 if args.json {
+                    if let Some(ref field) = args.field {
+                        // `--self --field message` lets shell scripts
+                        // capture a clean "Not running inside a nono
+                        // sandbox" string without parsing the
+                        // `{status, message}` envelope themselves.
+                        // Same shell-friendly extraction as the rest
+                        // of the --field surfaces.
+                        let value = serde_json::to_value(&result).map_err(|e| {
+                            NonoError::ConfigParse(format!("JSON serialization failed: {e}"))
+                        })?;
+                        let extracted = crate::field_extract::extract_field_output(
+                            &value,
+                            field,
+                            args.compact,
+                        )?;
+                        println!("{extracted}");
+                        return Ok(());
+                    }
                     let json = if args.compact {
                         serde_json::to_string(&result)
                     } else {
