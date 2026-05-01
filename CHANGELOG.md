@@ -340,6 +340,14 @@
   `--logs-tail` for live event-log tailing. Conflicts with
   the single-shot structured-output modes (`--json` /
   `--compact` / `--field` / `--quiet` / `--raw`)
+- *(profile)* `show --watch <DURATION>` and
+  `--max-iterations <N>` are the symmetric counterparts for
+  profile rendering. Useful when editing a profile JSON file
+  and watching the rendered resolution refresh as the
+  inheritance chain changes — catches mistakes in `extends:`
+  or `groups:` while you're still in the editor. Each tick
+  re-reads from disk via `load_profile_no_migrate`. Same
+  conflict shape as the inspect / ps watch flavors
 
 ### Observability
 
