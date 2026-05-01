@@ -788,6 +788,10 @@ pub struct ProfileListArgs {
     /// Output as JSON
     #[arg(long)]
     pub json: bool,
+    /// Emit compact JSON (no whitespace / indentation). Has no effect
+    /// without `--json`. Mirrors `profile show --compact` etc.
+    #[arg(long, requires = "json")]
+    pub compact: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -826,6 +830,10 @@ pub struct ProfileDiffArgs {
     /// Output as JSON
     #[arg(long)]
     pub json: bool,
+    /// Emit compact JSON (no whitespace / indentation). Has no effect
+    /// without `--json`.
+    #[arg(long, requires = "json")]
+    pub compact: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -844,6 +852,10 @@ pub struct ProfileGroupsArgs {
     /// Output as JSON
     #[arg(long)]
     pub json: bool,
+    /// Emit compact JSON (no whitespace / indentation). Has no effect
+    /// without `--json`.
+    #[arg(long, requires = "json")]
+    pub compact: bool,
     /// Show all platforms (not just current)
     #[arg(long)]
     pub all_platforms: bool,
@@ -2598,6 +2610,39 @@ mod tests {
             assert_eq!(args.logs_tail, None);
         } else {
             panic!("expected Inspect command");
+        }
+    }
+
+    #[test]
+    fn profile_list_diff_groups_compact_require_json() {
+        // Closure: each profile subcommand that already had `--json`
+        // now also accepts `--compact` under the same `requires`
+        // constraint. Negative tests use the `--compact` flag without
+        // `--json`; clap should reject all three.
+        for invocation in [
+            vec!["nono", "profile", "list", "--compact"],
+            vec!["nono", "profile", "diff", "a", "b", "--compact"],
+            vec!["nono", "profile", "groups", "--compact"],
+        ] {
+            let result = Cli::try_parse_from(&invocation);
+            assert!(
+                result.is_err(),
+                "{:?}: --compact without --json must be rejected",
+                invocation
+            );
+        }
+
+        // Positive: each accepts `--json --compact` together.
+        for invocation in [
+            vec!["nono", "profile", "list", "--json", "--compact"],
+            vec!["nono", "profile", "diff", "a", "b", "--json", "--compact"],
+            vec!["nono", "profile", "groups", "--json", "--compact"],
+        ] {
+            assert!(
+                Cli::try_parse_from(&invocation).is_ok(),
+                "{:?}: --json --compact must parse",
+                invocation
+            );
         }
     }
 

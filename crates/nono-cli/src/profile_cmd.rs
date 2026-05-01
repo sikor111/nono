@@ -371,12 +371,17 @@ pub(crate) fn cmd_groups(args: ProfileGroupsArgs) -> Result<()> {
     let pol = policy::load_embedded_policy()?;
 
     match args.name {
-        Some(name) => cmd_groups_detail(&pol, &name, args.json),
-        None => cmd_groups_list(&pol, args.json, args.all_platforms),
+        Some(name) => cmd_groups_detail(&pol, &name, args.json, args.compact),
+        None => cmd_groups_list(&pol, args.json, args.compact, args.all_platforms),
     }
 }
 
-fn cmd_groups_list(pol: &policy::Policy, json: bool, all_platforms: bool) -> Result<()> {
+fn cmd_groups_list(
+    pol: &policy::Policy,
+    json: bool,
+    compact: bool,
+    all_platforms: bool,
+) -> Result<()> {
     let mut groups: Vec<(&String, &Group)> = pol.groups.iter().collect();
     groups.sort_by_key(|(name, _)| name.as_str());
 
@@ -398,7 +403,13 @@ fn cmd_groups_list(pol: &policy::Policy, json: bool, all_platforms: bool) -> Res
                 })
             })
             .collect();
-        println!("{}", to_json(&serde_json::Value::Array(arr))?);
+        let val = serde_json::Value::Array(arr);
+        let rendered = if compact {
+            to_json_compact(&val)?
+        } else {
+            to_json(&val)?
+        };
+        println!("{rendered}");
         return Ok(());
     }
 
@@ -430,7 +441,7 @@ fn cmd_groups_list(pol: &policy::Policy, json: bool, all_platforms: bool) -> Res
     Ok(())
 }
 
-fn cmd_groups_detail(pol: &policy::Policy, name: &str, json: bool) -> Result<()> {
+fn cmd_groups_detail(pol: &policy::Policy, name: &str, json: bool, compact: bool) -> Result<()> {
     let group = pol.groups.get(name).ok_or_else(|| {
         NonoError::ProfileParse(format!(
             "group '{}' not found in policy.json. Use `nono profile groups` to list available groups",
@@ -440,7 +451,12 @@ fn cmd_groups_detail(pol: &policy::Policy, name: &str, json: bool) -> Result<()>
 
     if json {
         let val = group_to_json(name, group);
-        println!("{}", to_json(&val)?);
+        let rendered = if compact {
+            to_json_compact(&val)?
+        } else {
+            to_json(&val)?
+        };
+        println!("{rendered}");
         return Ok(());
     }
 
@@ -716,7 +732,13 @@ pub(crate) fn cmd_list(args: ProfileListArgs) -> Result<()> {
             .chain(pack_entries.iter().map(|(n, _, p)| format_entry(n, p)))
             .chain(user_profiles.iter().map(|(n, p)| format_entry(n, p)))
             .collect();
-        println!("{}", to_json(&serde_json::Value::Array(arr))?);
+        let val = serde_json::Value::Array(arr);
+        let rendered = if args.compact {
+            to_json_compact(&val)?
+        } else {
+            to_json(&val)?
+        };
+        println!("{rendered}");
         return Ok(());
     }
 
@@ -1246,7 +1268,12 @@ pub(crate) fn cmd_diff(args: ProfileDiffArgs) -> Result<()> {
 
     if args.json {
         let val = diff_to_json(&args.profile1, &args.profile2, &p1, &p2);
-        println!("{}", to_json(&val)?);
+        let rendered = if args.compact {
+            to_json_compact(&val)?
+        } else {
+            to_json(&val)?
+        };
+        println!("{rendered}");
         return Ok(());
     }
 
@@ -2999,7 +3026,7 @@ mod tests {
     #[test]
     fn test_groups_unknown_errors() {
         let pol = policy::load_embedded_policy().expect("should load policy");
-        let result = cmd_groups_detail(&pol, "nonexistent_group_xyz", false);
+        let result = cmd_groups_detail(&pol, "nonexistent_group_xyz", false, false);
         assert!(result.is_err());
     }
 
