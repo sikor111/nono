@@ -1599,8 +1599,19 @@ pub struct WhyArgs {
     /// list — `tcp_connect_ports`, `tcp_bind_ports`, or `localhost_ports`
     /// — covers the port, or denies if network is blocked overall.
     #[arg(long, value_name = "PORT", help_heading = "QUERY",
-          conflicts_with_all = &["host", "port", "path", "command_name", "net"])]
+          conflicts_with_all = &["host", "port", "path", "command_name", "net", "tcp_bind"])]
     pub tcp: Option<u16>,
+
+    /// Check whether a single TCP port is bind-allowed (listen / bind)
+    /// — narrower than `--tcp` since `tcp_connect_ports` is intentionally
+    /// ignored. Useful when verifying that `--allow-port <PORT>` (which
+    /// only authorizes inbound bind) actually covers a server-side port,
+    /// without being misled by an unrelated outbound `--allow-connect-port`
+    /// grant on the same number. Resolution: `localhost_ports` then
+    /// `tcp_bind_ports`, falling back to the resolved network mode.
+    #[arg(long = "tcp-bind", value_name = "PORT", help_heading = "QUERY",
+          conflicts_with_all = &["host", "port", "path", "command_name", "net", "tcp"])]
+    pub tcp_bind: Option<u16>,
 
     /// Command name to check against the resolved policy's blocklist /
     /// allowlist (e.g. `nono why --command rm --profile claude`).
@@ -1631,11 +1642,11 @@ pub struct WhyArgs {
     /// understanding what `--profile NAME` grants in aggregate before
     /// poking individual paths / hosts / commands. Mutually exclusive
     /// with the query flags (`--path`, `--host`, `--net`, `--tcp`,
-    /// `--command`).
+    /// `--tcp-bind`, `--command`).
     #[arg(
         long,
         help_heading = "OPTIONS",
-        conflicts_with_all = &["path", "host", "net", "tcp", "command_name"],
+        conflicts_with_all = &["path", "host", "net", "tcp", "tcp_bind", "command_name"],
     )]
     pub print_policy: bool,
 
@@ -2720,6 +2731,7 @@ mod tests {
             vec!["nono", "why", "--print-policy", "--host", "example.com"],
             vec!["nono", "why", "--print-policy", "--net", "example.com:443"],
             vec!["nono", "why", "--print-policy", "--tcp", "443"],
+            vec!["nono", "why", "--print-policy", "--tcp-bind", "8080"],
             vec!["nono", "why", "--print-policy", "--command", "rm"],
         ] {
             assert!(
@@ -2735,6 +2747,43 @@ mod tests {
             assert!(args.print_policy);
         } else {
             panic!("expected Why");
+        }
+    }
+
+    #[test]
+    fn why_tcp_bind_parses_and_conflicts_with_tcp_and_other_query_selectors() {
+        // Standalone parse populates the right field.
+        let parsed =
+            Cli::try_parse_from(["nono", "why", "--tcp-bind", "8080"]).expect("standalone parse");
+        if let Commands::Why(args) = parsed.command {
+            assert_eq!(args.tcp_bind, Some(8080));
+            assert!(args.tcp.is_none());
+        } else {
+            panic!("expected Why");
+        }
+
+        // Mutually exclusive with --tcp (the broader query) and with the
+        // path/host/net/command selectors. Pairing them would make the
+        // verdict ambiguous (which question are you actually asking?).
+        for invocation in [
+            vec!["nono", "why", "--tcp", "443", "--tcp-bind", "8080"],
+            vec!["nono", "why", "--tcp-bind", "8080", "--path", "/tmp"],
+            vec!["nono", "why", "--tcp-bind", "8080", "--host", "example.com"],
+            vec![
+                "nono",
+                "why",
+                "--tcp-bind",
+                "8080",
+                "--net",
+                "example.com:443",
+            ],
+            vec!["nono", "why", "--tcp-bind", "8080", "--command", "rm"],
+        ] {
+            assert!(
+                Cli::try_parse_from(&invocation).is_err(),
+                "{:?}: --tcp-bind + other query flag must be rejected",
+                invocation
+            );
         }
     }
 

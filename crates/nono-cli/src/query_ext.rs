@@ -423,6 +423,66 @@ pub fn query_tcp_port(port: u16, caps: &CapabilitySet) -> QueryResult {
     }
 }
 
+/// Bind-only variant of [`query_tcp_port`]. Walks the same allowlists
+/// but ignores `tcp_connect_ports` entirely — those grants only
+/// authorize outbound, so they must NOT cause a `--tcp-bind` query to
+/// say "yes" when the user is asking specifically about whether the
+/// child process can listen on the port.
+///
+/// Resolution order:
+///   1. `localhost_ports` — bidirectional IPC (covers bind + connect).
+///   2. `tcp_bind_ports` — inbound bind allow.
+///   3. Otherwise: deny if network is blocked / proxy-only, allow if
+///      network is generally open (no per-port bind filter applied).
+pub fn query_tcp_bind_port(port: u16, caps: &CapabilitySet) -> QueryResult {
+    if caps.localhost_ports().contains(&port) {
+        return QueryResult::Allowed {
+            reason: "tcp_localhost_pinned".to_string(),
+            granted_path: None,
+            access: Some(format!(
+                "localhost-only IPC on port {port} (covers bind + connect)"
+            )),
+            source: Some("policy:localhost_ports".to_string()),
+        };
+    }
+
+    if caps.tcp_bind_ports().contains(&port) {
+        return QueryResult::Allowed {
+            reason: "tcp_bind_allowed".to_string(),
+            granted_path: None,
+            access: Some(format!("local TCP bind on port {port}")),
+            source: Some("policy:tcp_bind_ports".to_string()),
+        };
+    }
+
+    if caps.is_network_blocked() {
+        QueryResult::Denied {
+            reason: "tcp_bind_not_allowlisted".to_string(),
+            details: Some(format!(
+                "Port {port} is not in tcp_bind_ports or localhost_ports, \
+                 and the resolved network mode blocks unfiltered bind. Add \
+                 `--allow-port {port}` (bind) or `--allow-localhost-port \
+                 {port}` (bidirectional localhost) to permit binding. \
+                 (`tcp_connect_ports` grants are intentionally ignored \
+                 here — they authorize outbound only.)"
+            )),
+            policy_source: None,
+            matching_capability: None,
+            suggested_flag: Some(format!("--allow-port {port}")),
+        }
+    } else {
+        QueryResult::Allowed {
+            reason: "network_unrestricted".to_string(),
+            granted_path: None,
+            access: Some(format!(
+                "Network is not filtered by bind allowlist — TCP bind on \
+                 port {port} is permitted"
+            )),
+            source: None,
+        }
+    }
+}
+
 /// Query whether running a command is permitted by the resolved policy.
 ///
 /// Mirrors the lookup performed at exec time: the explicit allow-list takes
@@ -1017,6 +1077,80 @@ mod tests {
                 );
             }
             other => panic!("expected allowed, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn query_tcp_bind_port_localhost_pin_takes_precedence() {
+        let caps = CapabilitySet::new()
+            .block_network()
+            .allow_localhost_port(8080);
+        match query_tcp_bind_port(8080, &caps) {
+            QueryResult::Allowed {
+                reason,
+                source,
+                access,
+                ..
+            } => {
+                assert_eq!(reason, "tcp_localhost_pinned");
+                assert_eq!(source.as_deref(), Some("policy:localhost_ports"));
+                // Localhost binding doc string should mention bind+connect
+                // so the user knows the grant is bidirectional.
+                assert!(access.unwrap_or_default().contains("bind + connect"));
+            }
+            other => panic!("expected allowed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn query_tcp_bind_port_bind_list_attributed() {
+        let mut caps = CapabilitySet::new().block_network();
+        caps.add_tcp_bind_port(8080);
+        match query_tcp_bind_port(8080, &caps) {
+            QueryResult::Allowed { reason, source, .. } => {
+                assert_eq!(reason, "tcp_bind_allowed");
+                assert_eq!(source.as_deref(), Some("policy:tcp_bind_ports"));
+            }
+            other => panic!("expected allowed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn query_tcp_bind_port_ignores_connect_list() {
+        // Critical contract: a tcp_connect_ports grant must NOT make a
+        // bind-only query come back allowed. Otherwise the flag would be
+        // a false positive — the whole reason `--tcp-bind` exists is to
+        // distinguish bind from connect grants on the same port.
+        let mut caps = CapabilitySet::new().block_network();
+        caps.add_tcp_connect_port(8080);
+        match query_tcp_bind_port(8080, &caps) {
+            QueryResult::Denied {
+                reason,
+                suggested_flag,
+                ..
+            } => {
+                assert_eq!(reason, "tcp_bind_not_allowlisted");
+                assert_eq!(
+                    suggested_flag.as_deref(),
+                    Some("--allow-port 8080"),
+                    "bind hint should suggest --allow-port (not --allow-connect-port)"
+                );
+            }
+            other => panic!(
+                "expected denied — connect grant must not satisfy a bind query — got {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn query_tcp_bind_port_unfiltered_network_lets_any_port_through() {
+        let caps = CapabilitySet::new();
+        match query_tcp_bind_port(12345, &caps) {
+            QueryResult::Allowed { reason, source, .. } => {
+                assert_eq!(reason, "network_unrestricted");
+                assert!(source.is_none());
+            }
+            other => panic!("expected allowed, got {other:?}"),
         }
     }
 }
