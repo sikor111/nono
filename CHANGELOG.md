@@ -419,6 +419,26 @@
   deterministic. Third `--search` surface, completing the
   triplet across the three discoverable profile catalogues
   (guide / groups / profiles)
+- *(profile)* `validate --watch <DURATION>` and
+  `--max-iterations <N>` re-run validation on a fixed cadence
+  with the same clear-screen + banner convention as the rest
+  of the watch surfaces. Use case: edit a profile in
+  `$EDITOR` while a second terminal runs `nono profile
+  validate my.json --watch 1s` — the `valid` / `invalid`
+  verdict and per-rule `[ok]` / `[warn]` / `[err]` lines flip
+  the moment you save, giving instant feedback without
+  rerunning the command. Validation failures explicitly do
+  NOT terminate the loop — errors stay on screen until you
+  fix them, then flip to `valid` on the next tick. Other
+  error paths (e.g. embedded policy load failure) still
+  propagate. Conflicts with structured-output / quiet modes
+  (`--json` / `--compact` / `--field` / `--quiet`); `--quiet`
+  in particular would call `std::process::exit()` and
+  terminate the loop on the first tick. Sixth `--watch`
+  surface, closing the editing-loop ergonomic across the
+  full workflow: `show` (rendering) + `diff` (drift) +
+  `why` (resolution) + `validate` (correctness) + `inspect`
+  (events) + `ps` (runtime state)
 
 ### Observability
 
