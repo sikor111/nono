@@ -43,11 +43,32 @@ pub fn run_ps(args: &PsArgs) -> Result<()> {
             // a dumb pipe.
             print!("\x1b[2J\x1b[H");
             std::io::Write::flush(&mut std::io::stdout()).ok();
+            // Print a refresh banner so the user can tell at a glance
+            // whether the screen is alive and how often it ticks.
+            // Going through chrono::Local so the time is in the user's
+            // local zone rather than UTC.
+            println!("{}", format_watch_banner(chrono::Local::now(), interval));
+            println!();
             print_ps_table_once(args)?;
             std::thread::sleep(dur);
         }
     }
     print_ps_table_once(args)
+}
+
+/// Format the `nono ps --watch` header line shown above each refresh.
+///
+/// Pure formatter so the header layout is unit-testable without
+/// spawning the watch loop. Uses HH:MM:SS local time + the interval in
+/// seconds — terminal-friendly width, no date (the watch loop survives
+/// midnight rollover, but a human watching `top` doesn't need the date
+/// every refresh).
+fn format_watch_banner(now: chrono::DateTime<chrono::Local>, interval_secs: u64) -> String {
+    format!(
+        "nono ps  -  refreshed {}  (every {}s)",
+        now.format("%H:%M:%S"),
+        interval_secs,
+    )
 }
 
 fn print_ps_table_once(args: &PsArgs) -> Result<()> {
@@ -1189,6 +1210,38 @@ mod tests {
         };
         assert!(ps_matches(&target, &args, None));
         assert!(!ps_matches(&wrong_name, &args, None));
+    }
+
+    #[test]
+    fn format_watch_banner_uses_hhmmss_and_interval() {
+        // Anchor time so the assertion is deterministic across test
+        // hosts / time zones — chrono::Local::with_ymd_and_hms returns
+        // a LocalResult, so unwrap a known-valid 2026-05-01 14:23:05.
+        use chrono::TimeZone;
+        let when = chrono::Local
+            .with_ymd_and_hms(2026, 5, 1, 14, 23, 5)
+            .single()
+            .expect("valid local time");
+        let banner = format_watch_banner(when, 5);
+        assert_eq!(
+            banner, "nono ps  -  refreshed 14:23:05  (every 5s)",
+            "watch banner format must be stable: HH:MM:SS local time + interval"
+        );
+    }
+
+    #[test]
+    fn format_watch_banner_handles_minute_or_longer_intervals() {
+        // `parse_duration_to_secs` happily accepts `1m` / `1h`; the
+        // banner just shows the resolved seconds count for honesty
+        // (so users know what's *actually* in flight if they typed
+        // `--watch 1m`).
+        use chrono::TimeZone;
+        let when = chrono::Local
+            .with_ymd_and_hms(2026, 5, 1, 0, 0, 0)
+            .single()
+            .expect("valid local time");
+        assert!(format_watch_banner(when, 60).contains("(every 60s)"));
+        assert!(format_watch_banner(when, 3600).contains("(every 3600s)"));
     }
 
     #[test]
