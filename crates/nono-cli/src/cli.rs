@@ -1640,8 +1640,9 @@ pub struct WhyArgs {
 
     /// In addition to the verdict, list every rule that touches the
     /// query: capabilities (with a `sufficient?` column) for `--path`,
-    /// and every entry in `allowed_commands` / `blocked_commands`
-    /// (with a `matches?` column) for `--command`. Useful for
+    /// every entry in `allowed_commands` / `blocked_commands` (with
+    /// a `matches?` column) for `--command`, and every per-port
+    /// allowlist entry for `--tcp` / `--tcp-bind`. Useful for
     /// debugging complex profiles where the best-match verdict alone
     /// doesn't capture the full picture.
     #[arg(long, help_heading = "OPTIONS")]

@@ -144,10 +144,12 @@ pub(crate) fn run_why(args: WhyArgs) -> Result<()> {
 
     // The `--explain` rider returns a match list alongside the verdict.
     // Match shape varies by query kind (paths report capabilities,
-    // commands report rule entries) so we keep them in separate
-    // optional state vars; only one will ever be Some at a time.
+    // commands report rule entries, ports report allowlist entries)
+    // so we keep them in separate optional state vars; only one
+    // will ever be Some at a time.
     let mut explained_path: Option<Vec<query_ext::ExplainedMatch>> = None;
     let mut explained_command: Option<Vec<query_ext::ExplainedCommandMatch>> = None;
+    let mut explained_port: Option<Vec<query_ext::ExplainedPortMatch>> = None;
     let result = if let Some(ref path) = args.path {
         let op = match args.op {
             Some(WhyOp::Read) => AccessMode::Read,
@@ -169,9 +171,21 @@ pub(crate) fn run_why(args: WhyArgs) -> Result<()> {
     } else if let Some(ref host) = args.host {
         query_network(host, args.port, &caps)
     } else if let Some(port) = args.tcp {
-        query_ext::query_tcp_port(port, &caps)
+        if args.explain {
+            let (verdict, matches) = query_ext::query_tcp_port_explained(port, &caps);
+            explained_port = Some(matches);
+            verdict
+        } else {
+            query_ext::query_tcp_port(port, &caps)
+        }
     } else if let Some(port) = args.tcp_bind {
-        query_ext::query_tcp_bind_port(port, &caps)
+        if args.explain {
+            let (verdict, matches) = query_ext::query_tcp_bind_port_explained(port, &caps);
+            explained_port = Some(matches);
+            verdict
+        } else {
+            query_ext::query_tcp_bind_port(port, &caps)
+        }
     } else if let Some(ref command) = args.command_name {
         if args.explain {
             let (verdict, matches) = query_ext::query_command_explained(command, &caps)?;
@@ -195,6 +209,8 @@ pub(crate) fn run_why(args: WhyArgs) -> Result<()> {
             serde_json::json!({"result": result, "matches": matches})
         } else if let Some(matches) = &explained_command {
             serde_json::json!({"result": result, "matches": matches})
+        } else if let Some(matches) = &explained_port {
+            serde_json::json!({"result": result, "matches": matches})
         } else {
             serde_json::to_value(&result)
                 .map_err(|e| NonoError::ConfigParse(format!("JSON serialization failed: {e}")))?
@@ -214,6 +230,9 @@ pub(crate) fn run_why(args: WhyArgs) -> Result<()> {
         } else if let Some(matches) = &explained_command {
             println!();
             print_explained_command_matches(matches);
+        } else if let Some(matches) = &explained_port {
+            println!();
+            print_explained_port_matches(matches);
         }
     }
 
@@ -246,6 +265,30 @@ fn print_explained_matches(matches: &[query_ext::ExplainedMatch]) {
             m.access,
             m.source,
             if m.sufficient { "yes" } else { "no" },
+        );
+    }
+}
+
+/// Render `--tcp[-bind] --explain` port rows. Empty list means the
+/// policy configures no per-port allowlist (default-allow when
+/// network is open, default-deny when blocked) — surface that
+/// explicitly so the user knows the explainer ran.
+fn print_explained_port_matches(matches: &[query_ext::ExplainedPortMatch]) {
+    println!("All matching port rules:");
+    if matches.is_empty() {
+        println!(
+            "  (policy configures no localhost_ports, tcp_connect_ports, \
+             or tcp_bind_ports)"
+        );
+        return;
+    }
+    println!("  {:<8}  {:<22}  MATCHES?", "PORT", "LIST");
+    for m in matches {
+        println!(
+            "  {:<8}  {:<22}  {}",
+            m.port,
+            m.list,
+            if m.matches { "yes" } else { "no" }
         );
     }
 }

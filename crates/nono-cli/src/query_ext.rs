@@ -590,6 +590,81 @@ pub fn query_command_explained(
     Ok((verdict, matches))
 }
 
+/// One row of the `nono why --tcp[-bind] --explain` table: a single
+/// port from a configured allowlist, plus whether it covers the
+/// queried port. Empty match list means the policy configures no
+/// per-port allowlists at all (default-allow when network is open,
+/// default-deny when blocked).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExplainedPortMatch {
+    /// The port entry from the policy.
+    pub port: u16,
+    /// Which list it came from — `localhost_ports`, `tcp_connect_ports`,
+    /// or `tcp_bind_ports`.
+    pub list: String,
+    /// Whether this entry equals the queried port.
+    pub matches: bool,
+}
+
+/// Like [`query_tcp_port`], but also returns every port from every
+/// configured allowlist with a `matches?` column so users can see
+/// the full per-port policy at a glance. Verdict reuses
+/// `query_tcp_port` so the two paths cannot drift.
+pub fn query_tcp_port_explained(
+    port: u16,
+    caps: &CapabilitySet,
+) -> (QueryResult, Vec<ExplainedPortMatch>) {
+    let mut matches: Vec<ExplainedPortMatch> = Vec::new();
+    for &p in caps.localhost_ports() {
+        matches.push(ExplainedPortMatch {
+            port: p,
+            list: "localhost_ports".to_string(),
+            matches: p == port,
+        });
+    }
+    for &p in caps.tcp_connect_ports() {
+        matches.push(ExplainedPortMatch {
+            port: p,
+            list: "tcp_connect_ports".to_string(),
+            matches: p == port,
+        });
+    }
+    for &p in caps.tcp_bind_ports() {
+        matches.push(ExplainedPortMatch {
+            port: p,
+            list: "tcp_bind_ports".to_string(),
+            matches: p == port,
+        });
+    }
+    (query_tcp_port(port, caps), matches)
+}
+
+/// Like [`query_tcp_bind_port`], but the explainer skips
+/// `tcp_connect_ports` to mirror the bind-only contract: surfacing
+/// connect rules as "matches: false" would be misleading since they
+/// can't satisfy bind regardless of port.
+pub fn query_tcp_bind_port_explained(
+    port: u16,
+    caps: &CapabilitySet,
+) -> (QueryResult, Vec<ExplainedPortMatch>) {
+    let mut matches: Vec<ExplainedPortMatch> = Vec::new();
+    for &p in caps.localhost_ports() {
+        matches.push(ExplainedPortMatch {
+            port: p,
+            list: "localhost_ports".to_string(),
+            matches: p == port,
+        });
+    }
+    for &p in caps.tcp_bind_ports() {
+        matches.push(ExplainedPortMatch {
+            port: p,
+            list: "tcp_bind_ports".to_string(),
+            matches: p == port,
+        });
+    }
+    (query_tcp_bind_port(port, caps), matches)
+}
+
 /// Query whether network access is permitted
 pub fn query_network(host: &str, port: u16, caps: &CapabilitySet) -> QueryResult {
     if caps.is_network_blocked() {
@@ -1287,6 +1362,63 @@ mod tests {
         // to render the "policy configures no … " hint.
         let caps = CapabilitySet::new();
         let (_, matches) = query_command_explained("anything", &caps).expect("explained");
+        assert!(matches.is_empty());
+    }
+
+    #[test]
+    fn query_tcp_port_explained_lists_every_port_across_all_three_lists() {
+        let mut caps = CapabilitySet::new()
+            .block_network()
+            .allow_localhost_port(8080);
+        caps.add_tcp_connect_port(443);
+        caps.add_tcp_bind_port(8000);
+        let (verdict, matches) = query_tcp_port_explained(443, &caps);
+        // Verdict identical to non-explain path.
+        match verdict {
+            QueryResult::Allowed { reason, source, .. } => {
+                assert_eq!(reason, "tcp_connect_allowed");
+                assert_eq!(source.as_deref(), Some("policy:tcp_connect_ports"));
+            }
+            other => panic!("expected allowed, got {other:?}"),
+        }
+        // All three lists surface; only the queried port marked.
+        assert_eq!(matches.len(), 3);
+        let by_port: std::collections::HashMap<u16, (&str, bool)> = matches
+            .iter()
+            .map(|m| (m.port, (m.list.as_str(), m.matches)))
+            .collect();
+        assert_eq!(by_port.get(&8080), Some(&("localhost_ports", false)));
+        assert_eq!(by_port.get(&443), Some(&("tcp_connect_ports", true)));
+        assert_eq!(by_port.get(&8000), Some(&("tcp_bind_ports", false)));
+    }
+
+    #[test]
+    fn query_tcp_bind_port_explained_excludes_connect_list() {
+        // Bind-only contract: connect grants must NOT show up in the
+        // explainer at all (not even as `matches: false`). Otherwise
+        // users would think connect allowlists are bind-relevant.
+        let mut caps = CapabilitySet::new().block_network();
+        caps.add_tcp_connect_port(443);
+        caps.add_tcp_bind_port(8000);
+        let (_, matches) = query_tcp_bind_port_explained(8000, &caps);
+        assert!(
+            !matches.iter().any(|m| m.list == "tcp_connect_ports"),
+            "tcp_connect_ports must be hidden from --tcp-bind --explain"
+        );
+        // The bind allowlist's matching entry surfaces with the flag.
+        let bind_row = matches
+            .iter()
+            .find(|m| m.list == "tcp_bind_ports" && m.port == 8000)
+            .expect("8000 in bind list");
+        assert!(bind_row.matches);
+    }
+
+    #[test]
+    fn query_tcp_port_explained_returns_empty_when_no_lists_configured() {
+        // No lists set → explainer surfaces empty Vec, not synthetic
+        // "all" rows. Printer relies on this to render the right hint.
+        let caps = CapabilitySet::new();
+        let (_, matches) = query_tcp_port_explained(443, &caps);
         assert!(matches.is_empty());
     }
 }
