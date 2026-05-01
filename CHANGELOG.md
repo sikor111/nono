@@ -67,6 +67,17 @@
   `NotFound` — covers the `--workdir /missing` / profile-resolved
   override_deny surface where the lib raises a different variant for
   the same root cause
+- *(ps)* Show a refresh banner above each `--watch` tick
+  (`nono ps  -  refreshed HH:MM:SS  (every Ns)`) so users can tell
+  the screen is alive
+- *(inspect)* `--compact` (requires `--json`) emits compact JSON
+  instead of pretty-printed — friendly for `jq -c` and log shippers
+- *(ps)* `--compact` (requires `--json`) — same compact-vs-pretty
+  knob; complements `--output ndjson` (which emits one record per
+  line without the array wrapper)
+- *(why)* `--compact` (requires `--json`) so the compact-vs-pretty
+  knob is uniform across every JSON-emitting query/inspection
+  command nono ships
 
 ### Observability
 
