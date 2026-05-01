@@ -319,6 +319,15 @@
    nono inspect "$sid" --quiet || nono inspect "$sid"; done`.
   Conflicts with output-emitting flags (`--json` / `--compact`
   / `--output` / `--field`) and with `--watch` / `--quiet`
+- *(inspect)* `--raw` emits the on-disk session JSON
+  byte-for-byte instead of going through serde
+  deserialize → reserialize. Useful for diagnosing schema-
+  evolution issues (preserves unknown fields the strict
+  deserializer would reject), byte-for-byte audit captures,
+  and `diff <(inspect a --raw) <(inspect b --raw)` style
+  comparisons. Conflicts with the structured output modes
+  (`--json` / `--compact` / `--field` / `--events` /
+  `--quiet`)
 
 ### Observability
 
