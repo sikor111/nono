@@ -19,6 +19,7 @@ mod credential_runtime;
 mod deprecated_policy;
 mod exec_strategy;
 mod execution_runtime;
+mod field_extract;
 mod instruction_deny;
 mod launch_runtime;
 mod learn;

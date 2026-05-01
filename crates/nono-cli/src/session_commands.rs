@@ -792,6 +792,16 @@ pub fn run_inspect(args: &InspectArgs) -> Result<()> {
                 })
             }
         };
+        if let Some(ref field) = args.field {
+            // Field extraction short-circuits the full-document render.
+            // Same shell-friendly semantics as `profile show --field`
+            // (jq-r-lite: primitives raw, composites JSON honoring
+            // --compact, missing fields error rather than empty).
+            let extracted =
+                crate::field_extract::extract_field_output(&value, field, args.compact)?;
+            println!("{extracted}");
+            return Ok(());
+        }
         let json = if args.compact {
             serde_json::to_string(&value)
         } else {

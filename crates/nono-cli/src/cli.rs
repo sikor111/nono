@@ -2276,6 +2276,14 @@ pub struct InspectArgs {
     /// Include file changes
     #[arg(long)]
     pub changes: bool,
+
+    /// Extract a single field from the JSON output instead of emitting
+    /// the whole record — same `jq -r`-lite semantics as
+    /// `nono profile show --field`. Accepts a top-level key
+    /// (`status`) or a JSON Pointer (`/events/0/timestamp` when
+    /// `--events` is also set). Requires `--json`.
+    #[arg(long, value_name = "PATH", requires = "json")]
+    pub field: Option<String>,
 }
 
 #[derive(Parser, Debug)]
@@ -2774,6 +2782,30 @@ mod tests {
             }
         } else {
             panic!("expected Profile");
+        }
+    }
+
+    #[test]
+    fn inspect_field_requires_json_and_parses_path_forms() {
+        // Symmetric with profile show/diff `--field`: --field needs
+        // --json since the human-readable inspect view has no JSON
+        // document to navigate.
+        let bare = Cli::try_parse_from(["nono", "inspect", "abc123", "--field", "status"]);
+        assert!(bare.is_err(), "--field without --json must fail to parse");
+
+        let with_json = Cli::try_parse_from([
+            "nono",
+            "inspect",
+            "abc123",
+            "--json",
+            "--field",
+            "/session/name",
+        ])
+        .expect("pointer path parses");
+        if let Commands::Inspect(args) = with_json.command {
+            assert_eq!(args.field.as_deref(), Some("/session/name"));
+        } else {
+            panic!("expected Inspect");
         }
     }
 
