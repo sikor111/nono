@@ -529,6 +529,67 @@ pub fn query_command(name: &str, caps: &CapabilitySet) -> Result<QueryResult> {
     })
 }
 
+/// One row of the `nono why --command --explain` table: a single rule
+/// from the resolved policy's allow/block lists, plus whether it
+/// covers the queried command name. Empty match list means neither
+/// the allow nor the block list is configured — the policy is
+/// effectively a default-allow for unknown commands.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExplainedCommandMatch {
+    /// The rule entry as authored in the profile / CLI flags.
+    pub rule: String,
+    /// Which list it came from — `blocked_commands` or `allowed_commands`.
+    pub list: String,
+    /// Whether this rule's name equals the queried basename. Match is
+    /// basename-vs-basename (mirrors `check_blocked_command`); paths
+    /// like `/bin/rm` and `rm` resolve identically.
+    pub matches: bool,
+}
+
+/// Like [`query_command`], but also returns every command rule from
+/// the resolved policy with a `matches?` column so users running
+/// `nono why --command --explain` can see *all* configured rules,
+/// not just the one that drove the verdict. The first item of the
+/// returned tuple is byte-for-byte identical to `query_command`.
+pub fn query_command_explained(
+    name: &str,
+    caps: &CapabilitySet,
+) -> Result<(QueryResult, Vec<ExplainedCommandMatch>)> {
+    let allowed = caps.allowed_commands().to_vec();
+    let blocked = caps.blocked_commands().to_vec();
+
+    // Mirror the basename derivation used by `check_blocked_command`
+    // so the explainer agrees with the verdict for path-style queries
+    // like `/bin/rm` — comparing the verbatim arg against rule names
+    // would let `/bin/rm` look "unmatched" while the actual policy
+    // (correctly) blocks it.
+    let basename = std::path::Path::new(name)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| name.to_string());
+
+    let mut matches: Vec<ExplainedCommandMatch> = Vec::new();
+    for rule in &blocked {
+        matches.push(ExplainedCommandMatch {
+            rule: rule.clone(),
+            list: "blocked_commands".to_string(),
+            matches: rule == &basename,
+        });
+    }
+    for rule in &allowed {
+        matches.push(ExplainedCommandMatch {
+            rule: rule.clone(),
+            list: "allowed_commands".to_string(),
+            matches: rule == &basename,
+        });
+    }
+
+    // Reuse the live verdict path so `--explain` cannot drift from
+    // what `nono why --command` would say without it.
+    let verdict = query_command(name, caps)?;
+    Ok((verdict, matches))
+}
+
 /// Query whether network access is permitted
 pub fn query_network(host: &str, port: u16, caps: &CapabilitySet) -> QueryResult {
     if caps.is_network_blocked() {
@@ -1152,5 +1213,80 @@ mod tests {
             }
             other => panic!("expected allowed, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn query_command_explained_lists_every_block_rule_with_match_flag() {
+        // Three blocked rules; only the queried name should match.
+        // The other two appear with `matches: false` so users see the
+        // full configured policy, not just the matching entry.
+        let caps = CapabilitySet::new()
+            .block_command("rm")
+            .block_command("dd")
+            .block_command("mkfs");
+        let (verdict, matches) = query_command_explained("rm", &caps).expect("explained query");
+        // Verdict identical to non-explain path (the regression guard
+        // for drift between the two code paths).
+        match verdict {
+            QueryResult::Denied { reason, .. } => {
+                assert_eq!(reason, "blocked_command");
+            }
+            other => panic!("expected denied, got {other:?}"),
+        }
+        // All three rules listed; only the matching one flagged.
+        assert_eq!(matches.len(), 3);
+        let by_rule: std::collections::HashMap<&str, bool> = matches
+            .iter()
+            .map(|m| (m.rule.as_str(), m.matches))
+            .collect();
+        assert_eq!(by_rule.get("rm"), Some(&true));
+        assert_eq!(by_rule.get("dd"), Some(&false));
+        assert_eq!(by_rule.get("mkfs"), Some(&false));
+        // Every row attributes to the right list.
+        for m in &matches {
+            assert_eq!(m.list, "blocked_commands");
+        }
+    }
+
+    #[test]
+    fn query_command_explained_marks_basename_match_for_pathlike_input() {
+        // `/bin/rm` and `rm` resolve to the same verdict at runtime,
+        // so the explainer must agree — comparing the verbatim arg
+        // against rule names would let `/bin/rm` look "unmatched"
+        // while query_command (correctly) blocks it. Regression guard.
+        let caps = CapabilitySet::new().block_command("rm");
+        let (_, matches) = query_command_explained("/bin/rm", &caps).expect("explained");
+        let rm_row = matches
+            .iter()
+            .find(|m| m.rule == "rm")
+            .expect("rm rule row");
+        assert!(rm_row.matches, "/bin/rm must match the rm rule");
+    }
+
+    #[test]
+    fn query_command_explained_includes_both_lists() {
+        let caps = CapabilitySet::new()
+            .block_command("rm")
+            .allow_command("echo");
+        let (_, matches) = query_command_explained("echo", &caps).expect("explained");
+        // Both rules surface; allow row wins the verdict but the
+        // block row still appears (with matches: false) so users
+        // see the full configured policy.
+        assert_eq!(matches.len(), 2);
+        let lists: std::collections::HashSet<&str> =
+            matches.iter().map(|m| m.list.as_str()).collect();
+        assert!(lists.contains("blocked_commands"));
+        assert!(lists.contains("allowed_commands"));
+    }
+
+    #[test]
+    fn query_command_explained_returns_empty_when_no_rules_configured() {
+        // Default caps have neither list configured. The explainer
+        // must surface that as an empty Vec (not a panic / not a
+        // synthetic "all" row) — the printer relies on `is_empty()`
+        // to render the "policy configures no … " hint.
+        let caps = CapabilitySet::new();
+        let (_, matches) = query_command_explained("anything", &caps).expect("explained");
+        assert!(matches.is_empty());
     }
 }

@@ -142,10 +142,12 @@ pub(crate) fn run_why(args: WhyArgs) -> Result<()> {
         return Ok(());
     }
 
-    // For `--path --explain` we need the full match list alongside the
-    // verdict; non-path queries fall back to the regular `query_path`/
-    // `query_network`/etc. paths since the explainer is path-specific.
-    let mut explained_matches: Option<Vec<query_ext::ExplainedMatch>> = None;
+    // The `--explain` rider returns a match list alongside the verdict.
+    // Match shape varies by query kind (paths report capabilities,
+    // commands report rule entries) so we keep them in separate
+    // optional state vars; only one will ever be Some at a time.
+    let mut explained_path: Option<Vec<query_ext::ExplainedMatch>> = None;
+    let mut explained_command: Option<Vec<query_ext::ExplainedCommandMatch>> = None;
     let result = if let Some(ref path) = args.path {
         let op = match args.op {
             Some(WhyOp::Read) => AccessMode::Read,
@@ -156,7 +158,7 @@ pub(crate) fn run_why(args: WhyArgs) -> Result<()> {
         if args.explain {
             let (verdict, matches) =
                 query_ext::query_path_explained(path, op, &caps, &overridden_paths)?;
-            explained_matches = Some(matches);
+            explained_path = Some(matches);
             verdict
         } else {
             query_path(path, op, &caps, &overridden_paths)?
@@ -171,7 +173,13 @@ pub(crate) fn run_why(args: WhyArgs) -> Result<()> {
     } else if let Some(port) = args.tcp_bind {
         query_ext::query_tcp_bind_port(port, &caps)
     } else if let Some(ref command) = args.command_name {
-        query_ext::query_command(command, &caps)?
+        if args.explain {
+            let (verdict, matches) = query_ext::query_command_explained(command, &caps)?;
+            explained_command = Some(matches);
+            verdict
+        } else {
+            query_ext::query_command(command, &caps)?
+        }
     } else {
         return Err(NonoError::ConfigParse(
             "--path, --host, --net, --tcp, --tcp-bind or --command is required".to_string(),
@@ -183,14 +191,14 @@ pub(crate) fn run_why(args: WhyArgs) -> Result<()> {
         // so consumers get both the verdict and the full match list.
         // Without `--explain`, the document stays as the bare verdict
         // for backwards compatibility with existing tooling.
-        let value = match &explained_matches {
-            None => serde_json::to_value(&result),
-            Some(matches) => Ok(serde_json::json!({
-                "result": result,
-                "matches": matches,
-            })),
-        }
-        .map_err(|e| NonoError::ConfigParse(format!("JSON serialization failed: {e}")))?;
+        let value: serde_json::Value = if let Some(matches) = &explained_path {
+            serde_json::json!({"result": result, "matches": matches})
+        } else if let Some(matches) = &explained_command {
+            serde_json::json!({"result": result, "matches": matches})
+        } else {
+            serde_json::to_value(&result)
+                .map_err(|e| NonoError::ConfigParse(format!("JSON serialization failed: {e}")))?
+        };
         let json = if args.compact {
             serde_json::to_string(&value)
         } else {
@@ -200,9 +208,12 @@ pub(crate) fn run_why(args: WhyArgs) -> Result<()> {
         println!("{}", json);
     } else {
         print_result(&result);
-        if let Some(matches) = &explained_matches {
+        if let Some(matches) = &explained_path {
             println!();
             print_explained_matches(matches);
+        } else if let Some(matches) = &explained_command {
+            println!();
+            print_explained_command_matches(matches);
         }
     }
 
@@ -235,6 +246,35 @@ fn print_explained_matches(matches: &[query_ext::ExplainedMatch]) {
             m.access,
             m.source,
             if m.sufficient { "yes" } else { "no" },
+        );
+    }
+}
+
+/// Render `--command --explain` rule rows. Empty list means the policy
+/// configures neither an allow nor a block list — surface that
+/// explicitly so the user knows the explainer ran (an empty table
+/// would otherwise look like a parsing bug).
+fn print_explained_command_matches(matches: &[query_ext::ExplainedCommandMatch]) {
+    println!("All matching command rules:");
+    if matches.is_empty() {
+        println!("  (policy configures no allowed_commands or blocked_commands)");
+        return;
+    }
+    println!("  {:<32}  {:<20}  MATCHES?", "RULE", "LIST");
+    for m in matches {
+        // Rule names cap at 32 chars to keep the column aligned. Long
+        // entries (rare — these are usually short binary names) get
+        // an ellipsis prefix mirroring the path renderer.
+        let rule = if m.rule.len() > 32 {
+            format!("…{}", &m.rule[m.rule.len() - 31..])
+        } else {
+            m.rule.clone()
+        };
+        println!(
+            "  {:<32}  {:<20}  {}",
+            rule,
+            m.list,
+            if m.matches { "yes" } else { "no" }
         );
     }
 }

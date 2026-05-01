@@ -1638,11 +1638,12 @@ pub struct WhyArgs {
     #[arg(long, requires = "json", help_heading = "OPTIONS")]
     pub compact: bool,
 
-    /// In addition to the verdict, list every capability that covers
-    /// the queried path (longest-prefix first) with a `sufficient?`
-    /// column. Useful for debugging complex profiles where a deny /
-    /// near-miss isn't obvious from the best-match verdict alone.
-    /// Currently honored for `--path` queries only.
+    /// In addition to the verdict, list every rule that touches the
+    /// query: capabilities (with a `sufficient?` column) for `--path`,
+    /// and every entry in `allowed_commands` / `blocked_commands`
+    /// (with a `matches?` column) for `--command`. Useful for
+    /// debugging complex profiles where the best-match verdict alone
+    /// doesn't capture the full picture.
     #[arg(long, help_heading = "OPTIONS")]
     pub explain: bool,
 
