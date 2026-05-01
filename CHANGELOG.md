@@ -80,8 +80,18 @@
   command nono ships
 - *(profile)* `show --compact` (requires `--json`) — closes the
   compact-vs-pretty pattern by extending it to the fourth and last
-  major JSON command. Other profile subcommands (`list`, `groups`,
-  `diff`, `validate`) remain pretty-only for now
+  major JSON command
+- *(profile)* `list --compact`, `diff --compact`, `groups --compact`
+  (each requires `--json`) — extend the compact-vs-pretty knob to
+  the remaining profile subcommands so the pattern is uniform across
+  every profile JSON path
+- *(profile)* `validate --compact` (requires `--json`) — completes
+  the compact set across every JSON-emitting profile subcommand
+- *(why)* `--explain` lists every fs capability that covers the
+  queried path (longest-prefix first) with a `sufficient?` column
+  showing near-misses. Honored for `--path` queries; `--json
+  --explain` wraps the document as
+  `{"result": …, "matches": [...]}`
 
 ### Observability
 
