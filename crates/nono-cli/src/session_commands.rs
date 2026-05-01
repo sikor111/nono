@@ -863,6 +863,14 @@ pub fn run_logs(args: &LogsArgs) -> Result<()> {
 pub fn run_inspect(args: &InspectArgs) -> Result<()> {
     let record = session::load_session(&args.session)?;
 
+    if args.quiet {
+        // The `?` above already returned non-zero (via main's
+        // error mapper) on missing-session. Reaching here means
+        // the session loaded — that's the entire signal `--quiet`
+        // is shaped to deliver, so exit 0 immediately.
+        std::process::exit(0);
+    }
+
     // Resolve the on-disk path of the session record once. Surfacing it
     // alongside the JSON makes "where can I `cat` this?" answerable
     // without the user re-deriving the path from the session_id.

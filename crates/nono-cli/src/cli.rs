@@ -2493,6 +2493,15 @@ pub struct InspectArgs {
     /// `--events` is also set). Requires `--json`.
     #[arg(long, value_name = "PATH", requires = "json")]
     pub field: Option<String>,
+
+    /// Suppress all stdout and signal "does this session exist?"
+    /// via exit code: `0` if the session loaded successfully,
+    /// non-zero (the existing missing-session error path) if not.
+    /// Useful for CI guards: `if nono inspect <id> --quiet; then …`.
+    /// Conflicts with output-emitting flags (`--json` / `--compact`
+    /// / `--field` / `--events`).
+    #[arg(long, conflicts_with_all = &["json", "compact", "field", "events"])]
+    pub quiet: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -3089,6 +3098,39 @@ mod tests {
             assert_eq!(args.field.as_deref(), Some("/result/reason"));
         } else {
             panic!("expected Why");
+        }
+    }
+
+    #[test]
+    fn inspect_quiet_parses_and_conflicts_with_output_modes() {
+        let bare = Cli::try_parse_from(["nono", "inspect", "abc123", "--quiet"])
+            .expect("--quiet alone parses");
+        if let Commands::Inspect(args) = bare.command {
+            assert!(args.quiet);
+        } else {
+            panic!("expected Inspect");
+        }
+
+        for invocation in [
+            vec!["nono", "inspect", "abc123", "--quiet", "--json"],
+            vec![
+                "nono",
+                "inspect",
+                "abc123",
+                "--quiet",
+                "--json",
+                "--compact",
+            ],
+            vec![
+                "nono", "inspect", "abc123", "--quiet", "--json", "--field", "status",
+            ],
+            vec!["nono", "inspect", "abc123", "--quiet", "--events"],
+        ] {
+            assert!(
+                Cli::try_parse_from(&invocation).is_err(),
+                "{:?}: --quiet + output flag must be rejected",
+                invocation
+            );
         }
     }
 
