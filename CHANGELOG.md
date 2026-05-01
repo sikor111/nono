@@ -268,6 +268,16 @@
   semantics stay aligned with what the human and JSON diff
   renderers operate on. Conflicts with `--json` / `--compact`
   / `--field`
+- *(prune)* `--quiet` is the fourth `--quiet` surface, for
+  CI cleanup gating: `0` if at least one session matched
+  (and was deleted unless `--dry-run`), `1` if nothing
+  matched. Common shell pattern: `if nono prune --age 7d
+  --dry-run --quiet; then nono prune --age 7d; fi`. Errors
+  during deletion still land in `tracing::debug!` exactly
+  like the verbose path — `--quiet` suppresses the
+  intentional progress chatter, not error visibility.
+  Conflicts with `--json` / `--compact` / `--field` /
+  `--interactive`
 
 ### Observability
 
