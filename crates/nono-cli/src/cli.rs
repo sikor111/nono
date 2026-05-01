@@ -2541,6 +2541,18 @@ pub struct PruneArgs {
     /// Requires `--json`.
     #[arg(long, value_name = "PATH", requires = "json")]
     pub field: Option<String>,
+
+    /// Suppress all stdout / stderr and signal "did anything get
+    /// pruned?" via exit code: 0 = at least one session was
+    /// matched (and removed, unless `--dry-run`), 1 = nothing
+    /// matched. Useful for CI gates that conditionally clean up:
+    /// `if nono prune --age 7d --dry-run --quiet; then nono prune
+    /// --age 7d; fi`. Conflicts with output-emitting flags
+    /// (`--json` / `--compact` / `--field`) and with
+    /// `--interactive` (the prompt would defeat the suppress-
+    /// stdout intent).
+    #[arg(long, conflicts_with_all = &["json", "compact", "field", "interactive"])]
+    pub quiet: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -3720,6 +3732,31 @@ mod tests {
             assert_eq!(args.field.as_deref(), Some("/sessions/0/session_id"));
         } else {
             panic!("expected Prune");
+        }
+    }
+
+    #[test]
+    fn prune_quiet_parses_and_conflicts_with_output_modes() {
+        // Standalone parse: bare prune + --quiet → just sets the
+        // flag.
+        let bare = Cli::try_parse_from(["nono", "prune", "--quiet"]).expect("--quiet alone parses");
+        if let Commands::Prune(args) = bare.command {
+            assert!(args.quiet);
+        } else {
+            panic!("expected Prune");
+        }
+
+        for invocation in [
+            vec!["nono", "prune", "--quiet", "--json"],
+            vec!["nono", "prune", "--quiet", "--json", "--compact"],
+            vec!["nono", "prune", "--quiet", "--json", "--field", "count"],
+            vec!["nono", "prune", "--quiet", "--interactive"],
+        ] {
+            assert!(
+                Cli::try_parse_from(&invocation).is_err(),
+                "{:?}: --quiet + output flag must be rejected",
+                invocation
+            );
         }
     }
 

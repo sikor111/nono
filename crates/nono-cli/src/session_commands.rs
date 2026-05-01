@@ -1035,6 +1035,41 @@ pub fn run_prune(args: &PruneArgs) -> Result<()> {
         }
     }
 
+    if args.quiet {
+        // Short-circuit before any output. Empty matched list →
+        // exit 1 (nothing to do). Otherwise delete (unless
+        // --dry-run) and exit 0. Errors during deletion are
+        // logged at debug level only — matches the verbose
+        // path's tolerance for partial cleanup failures.
+        if to_remove.is_empty() {
+            std::process::exit(1);
+        }
+        if !args.dry_run {
+            let dir = session::sessions_dir()?;
+            for s in &to_remove {
+                let session_file = dir.join(format!("{}.json", s.session_id));
+                let events_file = dir.join(format!("{}.events.ndjson", s.session_id));
+                if let Err(e) = std::fs::remove_file(&session_file) {
+                    debug!(
+                        "Failed to remove session file {}: {}",
+                        session_file.display(),
+                        e
+                    );
+                }
+                if events_file.exists() {
+                    if let Err(e) = std::fs::remove_file(&events_file) {
+                        debug!(
+                            "Failed to remove events file {}: {}",
+                            events_file.display(),
+                            e
+                        );
+                    }
+                }
+            }
+        }
+        std::process::exit(0);
+    }
+
     if to_remove.is_empty() {
         if args.json {
             // Empty doc with the same shape as the populated case
