@@ -374,6 +374,20 @@
   (`--json` / `--compact` / `--field` / `--quiet`) since
   those expect a single-shot render. Fifth `--watch` surface
   on the CLI
+- *(profile)* `guide --search <KEYWORD>` walks every section
+  body, surfaces each line that contains the keyword as a
+  case-insensitive substring, and prints them grouped under
+  their `## ` headings with 1-based per-section line numbers.
+  Closes the discovery loop with the existing guide flags:
+  `--list-sections` answers "what sections exist?",
+  `--section <NAME>` answers "show me one section by title",
+  and `--search <KEYWORD>` answers "where do bodies mention
+  X?". Body-only by design — title-based lookup is what
+  `--section` already does, so searching titles too would
+  double-count and clutter output. Empty match returns a
+  `ProfileParse` error with a `--list-sections` hint, mirror-
+  ing the `--section <NAME>` miss path. Conflicts with
+  `--section` and `--list-sections` (different display modes)
 
 ### Observability
 
