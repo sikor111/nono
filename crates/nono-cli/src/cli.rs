@@ -982,6 +982,16 @@ pub struct ProfileGroupsArgs {
     /// `--json`.
     #[arg(long, value_name = "PATH", requires = "json")]
     pub field: Option<String>,
+
+    /// Emit only the group names, one per line — symmetric to
+    /// `nono profile list --names-only`. Useful for shell loops
+    /// over policy groups: `for g in $(nono profile groups
+    /// --names-only); do nono profile groups "$g"; done`. Only
+    /// honored in list mode (no group name argument). Conflicts
+    /// with output-emitting flags (`--json` / `--compact` /
+    /// `--field`).
+    #[arg(long, conflicts_with_all = &["json", "compact", "field"])]
+    pub names_only: bool,
 }
 
 #[derive(Parser, Debug, Clone, Default)]
@@ -3306,6 +3316,72 @@ mod tests {
                 assert_eq!(l.field.as_deref(), Some("/0/name"));
             } else {
                 panic!("expected Profile::List");
+            }
+        } else {
+            panic!("expected Profile");
+        }
+    }
+
+    #[test]
+    fn profile_groups_names_only_parses_and_conflicts_with_output_modes() {
+        let bare =
+            Cli::try_parse_from(["nono", "profile", "groups", "--names-only"]).expect("parses");
+        if let Commands::Profile(args) = bare.command {
+            if let crate::cli::ProfileCommands::Groups(g) = args.command {
+                assert!(g.names_only);
+                assert!(g.name.is_none());
+            } else {
+                panic!("expected Profile::Groups");
+            }
+        } else {
+            panic!("expected Profile");
+        }
+
+        for invocation in [
+            vec!["nono", "profile", "groups", "--names-only", "--json"],
+            vec![
+                "nono",
+                "profile",
+                "groups",
+                "--names-only",
+                "--json",
+                "--compact",
+            ],
+            vec![
+                "nono",
+                "profile",
+                "groups",
+                "--names-only",
+                "--json",
+                "--field",
+                "/0/name",
+            ],
+        ] {
+            assert!(
+                Cli::try_parse_from(&invocation).is_err(),
+                "{:?}: --names-only + output flag must be rejected",
+                invocation
+            );
+        }
+
+        // --names-only + group name positional parses (clap-level
+        // — runtime rejects in cmd_groups since detail mode
+        // semantics don't fit). Just verify the parse succeeds
+        // here so we don't accidentally tighten too much.
+        let with_name = Cli::try_parse_from([
+            "nono",
+            "profile",
+            "groups",
+            "deny_credentials",
+            "--names-only",
+        ])
+        .expect("clap-level parse succeeds; runtime rejects");
+        if let Commands::Profile(args) = with_name.command {
+            if let crate::cli::ProfileCommands::Groups(g) = args.command {
+                assert!(g.names_only);
+                assert_eq!(g.name.as_deref(), Some("deny_credentials"));
+            } else {
+                panic!("expected Profile::Groups");
             }
         } else {
             panic!("expected Profile");

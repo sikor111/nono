@@ -459,6 +459,17 @@ pub(crate) fn cmd_groups(args: ProfileGroupsArgs) -> Result<()> {
 
     match args.name {
         Some(name) => {
+            // `--names-only` is meaningful only for the list shape.
+            // In detail mode we'd be printing one name (the one the
+            // user already passed in), which is tautological —
+            // error out so the user notices the mismatch.
+            if args.names_only {
+                return Err(NonoError::ProfileParse(
+                    "--names-only is only honored when listing groups; \
+                     drop the group name argument to use it"
+                        .to_string(),
+                ));
+            }
             cmd_groups_detail(&pol, &name, args.json, args.compact, args.field.as_deref())
         }
         None => cmd_groups_list(
@@ -467,6 +478,7 @@ pub(crate) fn cmd_groups(args: ProfileGroupsArgs) -> Result<()> {
             args.compact,
             args.all_platforms,
             args.field.as_deref(),
+            args.names_only,
         ),
     }
 }
@@ -477,12 +489,20 @@ fn cmd_groups_list(
     compact: bool,
     all_platforms: bool,
     field: Option<&str>,
+    names_only: bool,
 ) -> Result<()> {
     let mut groups: Vec<(&String, &Group)> = pol.groups.iter().collect();
     groups.sort_by_key(|(name, _)| name.as_str());
 
     if !all_platforms {
         groups.retain(|(_, g)| policy::group_matches_platform(g));
+    }
+
+    if names_only {
+        for (name, _) in &groups {
+            println!("{name}");
+        }
+        return Ok(());
     }
 
     if json {
