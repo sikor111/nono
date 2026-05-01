@@ -286,6 +286,13 @@
   Warnings are intentionally ignored (advisory only) so
   they don't block deployment. Conflicts with `--json` /
   `--compact` / `--field`
+- *(inspect)* `--quiet` is the sixth `--quiet` surface,
+  for session-existence guards: `0` if the session loaded
+  successfully, non-zero (the existing missing-session error
+  path) if not. Useful for CI: `if nono inspect "$SID"
+  --quiet; then nono inspect "$SID" --json | process; fi`.
+  Conflicts with output-emitting flags (`--json` / `--compact`
+  / `--field` / `--events`)
 
 ### Observability
 
