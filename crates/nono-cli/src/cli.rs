@@ -1669,6 +1669,14 @@ pub struct WhyArgs {
     )]
     pub print_policy: bool,
 
+    /// Extract a single field from the JSON output instead of emitting
+    /// the whole document — same `jq -r`-lite semantics as
+    /// `nono profile show --field` / `nono inspect --field`. Accepts
+    /// a top-level key (`reason`, `status`) or a JSON Pointer path
+    /// (`/matches/0/list` when `--explain` is set). Requires `--json`.
+    #[arg(long, value_name = "PATH", help_heading = "OPTIONS", requires = "json")]
+    pub field: Option<String>,
+
     /// Query current sandbox state (use inside a sandboxed process)
     #[arg(long = "self", help_heading = "OPTIONS")]
     pub self_query: bool,
@@ -2782,6 +2790,31 @@ mod tests {
             }
         } else {
             panic!("expected Profile");
+        }
+    }
+
+    #[test]
+    fn why_field_requires_json_and_parses_path_forms() {
+        // Same shell-friendly extraction as inspect / profile show.
+        // The human-readable why output has no document to navigate,
+        // so `--field` without `--json` must fail at parse time.
+        let bare = Cli::try_parse_from(["nono", "why", "--path", "/tmp", "--field", "reason"]);
+        assert!(bare.is_err(), "--field without --json must fail to parse");
+
+        let with_json = Cli::try_parse_from([
+            "nono",
+            "why",
+            "--path",
+            "/tmp",
+            "--json",
+            "--field",
+            "/result/reason",
+        ])
+        .expect("pointer path parses");
+        if let Commands::Why(args) = with_json.command {
+            assert_eq!(args.field.as_deref(), Some("/result/reason"));
+        } else {
+            panic!("expected Why");
         }
     }
 

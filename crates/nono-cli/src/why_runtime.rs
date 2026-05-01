@@ -126,6 +126,14 @@ pub(crate) fn run_why(args: WhyArgs) -> Result<()> {
                 0,
                 &extras,
             );
+            if let Some(ref field) = args.field {
+                // `--print-policy --field` extracts a single key from
+                // the dumped capability set, e.g. `--field network_mode`.
+                let extracted =
+                    crate::field_extract::extract_field_output(&value, field, args.compact)?;
+                println!("{extracted}");
+                return Ok(());
+            }
             let json = if args.compact {
                 serde_json::to_string(&value)
             } else {
@@ -215,6 +223,17 @@ pub(crate) fn run_why(args: WhyArgs) -> Result<()> {
             serde_json::to_value(&result)
                 .map_err(|e| NonoError::ConfigParse(format!("JSON serialization failed: {e}")))?
         };
+        if let Some(ref field) = args.field {
+            // Field extraction short-circuits the full-document render.
+            // Same shell-friendly semantics as `profile show --field`
+            // / `inspect --field` (jq-r-lite primitives raw, composites
+            // JSON honoring --compact, missing fields error rather
+            // than empty).
+            let extracted =
+                crate::field_extract::extract_field_output(&value, field, args.compact)?;
+            println!("{extracted}");
+            return Ok(());
+        }
         let json = if args.compact {
             serde_json::to_string(&value)
         } else {
