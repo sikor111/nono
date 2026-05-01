@@ -278,6 +278,14 @@
   intentional progress chatter, not error visibility.
   Conflicts with `--json` / `--compact` / `--field` /
   `--interactive`
+- *(profile)* `validate --quiet` is the fifth `--quiet`
+  surface, for CI validity gating: `0` if the profile is
+  valid (no errors), `1` if errors are present. Cleaner than
+  the `--field valid` form when shell scripts only need the
+  branch — `nono profile validate p.json --quiet && deploy`.
+  Warnings are intentionally ignored (advisory only) so
+  they don't block deployment. Conflicts with `--json` /
+  `--compact` / `--field`
 
 ### Observability
 
