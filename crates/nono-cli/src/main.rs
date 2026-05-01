@@ -110,11 +110,32 @@ fn main() {
         }
         error!("{}", e);
         eprintln!("nono: {}", e);
-        if let nono::NonoError::PathNotFound(path) = &e {
+        if let Some(missing_path) = path_for_not_found_hint(&e) {
             eprintln!();
-            eprintln!("{}", path_not_found_hint(path));
+            eprintln!("{}", path_not_found_hint(missing_path));
         }
         std::process::exit(1);
+    }
+}
+
+/// Return the offending path when an error is fundamentally "path
+/// doesn't exist", regardless of which error variant carries it.
+///
+/// `PathNotFound` is the lib's pre-checked "exists at grant time"
+/// failure. `PathCanonicalization` wraps `std::io::Error`s, but when
+/// its source is `ErrorKind::NotFound` it represents the same root
+/// cause from a different surface (e.g. `--workdir /nonexistent`,
+/// profile-resolved override_deny entries). Both deserve the same
+/// `mkdir -p` / `--allow <parent>` hint.
+fn path_for_not_found_hint(err: &nono::NonoError) -> Option<&std::path::Path> {
+    match err {
+        nono::NonoError::PathNotFound(path) => Some(path.as_path()),
+        nono::NonoError::PathCanonicalization { path, source }
+            if source.kind() == std::io::ErrorKind::NotFound =>
+        {
+            Some(path.as_path())
+        }
+        _ => None,
     }
 }
 
@@ -157,6 +178,59 @@ mod tests {
 
     fn sandbox_args() -> SandboxArgs {
         SandboxArgs::default()
+    }
+
+    #[test]
+    fn path_for_not_found_hint_matches_path_not_found() {
+        let err = nono::NonoError::PathNotFound(std::path::PathBuf::from("/missing"));
+        assert_eq!(
+            path_for_not_found_hint(&err).map(|p| p.to_string_lossy().into_owned()),
+            Some("/missing".to_string()),
+            "PathNotFound is the canonical surface for this hint"
+        );
+    }
+
+    #[test]
+    fn path_for_not_found_hint_matches_canonicalization_when_io_kind_is_not_found() {
+        // The sandbox prep code that resolves --workdir / profile paths
+        // canonicalize()s through std::io, so a missing path lands as
+        // PathCanonicalization with an inner NotFound. Same root cause
+        // as PathNotFound — same hint applies.
+        let err = nono::NonoError::PathCanonicalization {
+            path: std::path::PathBuf::from("/missing-workdir"),
+            source: std::io::Error::new(std::io::ErrorKind::NotFound, "boom"),
+        };
+        assert_eq!(
+            path_for_not_found_hint(&err).map(|p| p.to_string_lossy().into_owned()),
+            Some("/missing-workdir".to_string())
+        );
+    }
+
+    #[test]
+    fn path_for_not_found_hint_skips_canonicalization_for_other_io_kinds() {
+        // Permission denied / loop / IsADirectory are NOT solved by
+        // `mkdir -p`. Suppressing the hint avoids misleading users
+        // with a false-positive remediation suggestion.
+        let err = nono::NonoError::PathCanonicalization {
+            path: std::path::PathBuf::from("/etc/shadow"),
+            source: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "EACCES"),
+        };
+        assert!(
+            path_for_not_found_hint(&err).is_none(),
+            "permission-denied is a different remediation, must not trigger the hint"
+        );
+    }
+
+    #[test]
+    fn path_for_not_found_hint_skips_unrelated_errors() {
+        // BlockedCommand has its own dedicated hint (iter 7); we
+        // shouldn't double-print or generic-print PathNotFound advice
+        // for it.
+        let err = nono::NonoError::BlockedCommand {
+            command: "rm".to_string(),
+            reason: "deprecated".to_string(),
+        };
+        assert!(path_for_not_found_hint(&err).is_none());
     }
 
     #[test]
