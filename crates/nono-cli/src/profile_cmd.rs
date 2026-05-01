@@ -370,14 +370,84 @@ fn cmd_schema(args: ProfileSchemaArgs) -> Result<()> {
 // nono profile guide
 // ---------------------------------------------------------------------------
 
-fn cmd_guide(_args: ProfileGuideArgs) -> Result<()> {
+fn cmd_guide(args: ProfileGuideArgs) -> Result<()> {
     let guide = embedded::embedded_profile_guide();
+
+    if args.list_sections {
+        let sections = parse_guide_sections(guide);
+        for (title, _) in &sections {
+            println!("## {title}");
+        }
+        return Ok(());
+    }
+
+    if let Some(ref query) = args.section {
+        let sections = parse_guide_sections(guide);
+        let matched = find_guide_section(&sections, query).ok_or_else(|| {
+            NonoError::ProfileParse(format!(
+                "section {query:?} not found. Use `nono profile guide --list-sections` \
+                 to see available sections"
+            ))
+        })?;
+        // Reprint the heading so `--section X` output is
+        // self-describing (matches what `--list-sections` showed).
+        println!("## {}", matched.0);
+        print!("{}", matched.1);
+        return Ok(());
+    }
+
     let stdout = std::io::stdout();
     let mut handle = stdout.lock();
     handle
         .write_all(guide.as_bytes())
         .map_err(|e| NonoError::ProfileParse(format!("Failed to write to stdout: {e}")))?;
     Ok(())
+}
+
+/// Split the embedded guide on `## ` headings. The doc is
+/// markdown-ish (the title is the line text after the `## `, the
+/// body is every line until the next `## ` or EOF). Lines before
+/// the first `## ` heading (the document preamble) are dropped —
+/// they're either the H1 title or front-matter that doesn't fit
+/// section-extraction. Pure parser so it's unit-testable without
+/// touching the embedded literal.
+fn parse_guide_sections(guide: &str) -> Vec<(String, String)> {
+    let mut sections: Vec<(String, String)> = Vec::new();
+    let mut current_title: Option<String> = None;
+    let mut current_body = String::new();
+    for line in guide.split_inclusive('\n') {
+        // `## ` is the section delimiter. Skip H1 (`# `) and deeper
+        // headings (`### `, etc.) — they belong inside the
+        // enclosing section.
+        if let Some(rest) = line.strip_prefix("## ") {
+            if let Some(t) = current_title.take() {
+                sections.push((t, std::mem::take(&mut current_body)));
+            }
+            // Strip trailing newline from the title for cleaner
+            // output (the heading line will be reprinted by the
+            // caller).
+            current_title = Some(rest.trim_end_matches('\n').to_string());
+        } else if current_title.is_some() {
+            current_body.push_str(line);
+        }
+    }
+    if let Some(t) = current_title {
+        sections.push((t, current_body));
+    }
+    sections
+}
+
+/// Find the first section whose title contains `query` as a
+/// case-insensitive substring. Returns `None` for no match so the
+/// caller can surface a helpful `--list-sections` hint.
+fn find_guide_section<'a>(
+    sections: &'a [(String, String)],
+    query: &str,
+) -> Option<&'a (String, String)> {
+    let q = query.to_lowercase();
+    sections
+        .iter()
+        .find(|(title, _)| title.to_lowercase().contains(&q))
 }
 
 // ---------------------------------------------------------------------------
@@ -3235,4 +3305,64 @@ mod tests {
     // `extract_field_output` unit tests live in `crate::field_extract`
     // alongside the function itself. Profile-specific wiring is
     // covered by the clap-parse tests in `cli.rs`.
+
+    #[test]
+    fn parse_guide_sections_splits_on_h2_headings_and_drops_preamble() {
+        let guide = "\
+# Top Title
+
+Some preamble text that should be discarded.
+
+## 1. First Section
+
+First body line one.
+First body line two.
+
+## 2. Second Section
+
+Second body.
+";
+        let sections = parse_guide_sections(guide);
+        assert_eq!(sections.len(), 2, "exactly two H2 sections");
+        assert_eq!(sections[0].0, "1. First Section");
+        assert!(sections[0].1.contains("First body line one"));
+        assert!(sections[0].1.contains("First body line two"));
+        assert!(
+            !sections[0].1.contains("Some preamble"),
+            "preamble must not bleed into the first section"
+        );
+        assert!(
+            !sections[0].1.contains("Second body"),
+            "first section must not bleed into the second"
+        );
+        assert_eq!(sections[1].0, "2. Second Section");
+    }
+
+    #[test]
+    fn parse_guide_sections_treats_h3_as_body_not_delimiter() {
+        // Deeper headings (### or more) must stay inside their
+        // enclosing H2 section. Otherwise `--section` would split
+        // on every heading depth which is not the intent.
+        let guide = "## A\n\nintro\n\n### A.1\n\ndetail\n\n## B\n\n";
+        let sections = parse_guide_sections(guide);
+        assert_eq!(sections.len(), 2);
+        assert!(sections[0].1.contains("### A.1"));
+        assert!(sections[0].1.contains("detail"));
+    }
+
+    #[test]
+    fn find_guide_section_matches_case_insensitive_substring() {
+        let sections = vec![
+            ("1. Profile File Location".to_string(), "body1".to_string()),
+            ("5. Validation".to_string(), "body5".to_string()),
+        ];
+        // Exact title (case-insensitive).
+        assert!(find_guide_section(&sections, "validation").is_some());
+        assert!(find_guide_section(&sections, "VALIDATION").is_some());
+        // Substring (numeric prefix or suffix).
+        assert!(find_guide_section(&sections, "valid").is_some());
+        assert!(find_guide_section(&sections, "1.").is_some());
+        // Miss returns None so the caller can surface a hint.
+        assert!(find_guide_section(&sections, "nonexistent").is_none());
+    }
 }

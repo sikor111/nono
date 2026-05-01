@@ -823,7 +823,21 @@ pub struct ProfileSchemaArgs {
 }
 
 #[derive(Parser, Debug)]
-pub struct ProfileGuideArgs {}
+pub struct ProfileGuideArgs {
+    /// Print only the named guide section (case-insensitive
+    /// substring match against the `## ` headings). Useful for
+    /// targeted reads — `nono profile guide --section validation`
+    /// gets just the validation rules without scrolling through
+    /// everything else. Conflicts with `--list-sections`.
+    #[arg(long, value_name = "NAME", conflicts_with = "list_sections")]
+    pub section: Option<String>,
+
+    /// List the section titles (one per line) without their bodies.
+    /// Pair with `--section` afterwards to drill into a specific
+    /// one. Useful for shell-tab-completion-like discovery.
+    #[arg(long)]
+    pub list_sections: bool,
+}
 
 #[derive(Parser, Debug)]
 pub struct ProfileListArgs {
@@ -3286,6 +3300,49 @@ mod tests {
         assert!(
             with_output.is_err(),
             "--watch + --output must conflict — interactive mode vs batch render"
+        );
+    }
+
+    #[test]
+    fn profile_guide_section_and_list_are_mutually_exclusive() {
+        // --section narrows; --list-sections gives an index. Both
+        // selecting the same render is a contradiction, so clap
+        // rejects.
+        let bare = Cli::try_parse_from(["nono", "profile", "guide"]).expect("bare parses");
+        if let Commands::Profile(args) = bare.command {
+            if let crate::cli::ProfileCommands::Guide(g) = args.command {
+                assert!(g.section.is_none() && !g.list_sections);
+            } else {
+                panic!("expected Profile::Guide");
+            }
+        } else {
+            panic!("expected Profile");
+        }
+
+        let with_section =
+            Cli::try_parse_from(["nono", "profile", "guide", "--section", "validation"])
+                .expect("--section parses");
+        if let Commands::Profile(args) = with_section.command {
+            if let crate::cli::ProfileCommands::Guide(g) = args.command {
+                assert_eq!(g.section.as_deref(), Some("validation"));
+            } else {
+                panic!("expected Profile::Guide");
+            }
+        } else {
+            panic!("expected Profile");
+        }
+
+        let conflict = Cli::try_parse_from([
+            "nono",
+            "profile",
+            "guide",
+            "--section",
+            "validation",
+            "--list-sections",
+        ]);
+        assert!(
+            conflict.is_err(),
+            "--section + --list-sections must conflict"
         );
     }
 
