@@ -2433,6 +2433,20 @@ pub struct PruneArgs {
     /// Keep only the N most recent sessions
     #[arg(long, value_name = "N")]
     pub keep: Option<usize>,
+
+    /// Emit a machine-readable JSON summary instead of the
+    /// human-readable progress lines. The document is
+    /// `{"action": "would-remove" | "removed", "count": N,
+    /// "sessions": [{"session_id", "started"}, ...]}`. Useful for
+    /// scripting cleanup workflows. Conflicts with `--interactive`
+    /// (no place to prompt in JSON mode).
+    #[arg(long, conflicts_with = "interactive")]
+    pub json: bool,
+
+    /// Emit compact JSON (no whitespace / indentation). Has no
+    /// effect without `--json`.
+    #[arg(long, requires = "json")]
+    pub compact: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -3368,6 +3382,41 @@ mod tests {
         // Invalid value: clap's value_enum rejects at parse time, no
         // chance for a typo to silently fall back to a default.
         assert!(Cli::try_parse_from(["nono", "ps", "--header-format", "bogus"]).is_err());
+    }
+
+    #[test]
+    fn prune_json_parses_and_conflicts_with_interactive() {
+        // --json is the machine-readable counterpart to the human
+        // progress lines. --interactive prompts on stderr, which
+        // would mix output streams in scripted JSON consumers, so
+        // the two are mutually exclusive at the clap layer.
+        let bare = Cli::try_parse_from(["nono", "prune", "--json"]).expect("--json alone");
+        if let Commands::Prune(args) = bare.command {
+            assert!(args.json);
+            assert!(!args.compact, "--compact stays off without explicit opt-in");
+        } else {
+            panic!("expected Prune");
+        }
+
+        let with_compact = Cli::try_parse_from(["nono", "prune", "--json", "--compact"])
+            .expect("--json + --compact");
+        if let Commands::Prune(args) = with_compact.command {
+            assert!(args.json && args.compact);
+        } else {
+            panic!("expected Prune");
+        }
+
+        // --compact alone (no --json) is meaningless; rejected.
+        assert!(
+            Cli::try_parse_from(["nono", "prune", "--compact"]).is_err(),
+            "--compact requires --json"
+        );
+
+        // --json + --interactive: clap rejects (no place to prompt).
+        assert!(
+            Cli::try_parse_from(["nono", "prune", "--json", "--interactive"]).is_err(),
+            "--json + --interactive must conflict"
+        );
     }
 
     #[test]

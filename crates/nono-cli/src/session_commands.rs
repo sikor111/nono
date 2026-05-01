@@ -1027,7 +1027,30 @@ pub fn run_prune(args: &PruneArgs) -> Result<()> {
     }
 
     if to_remove.is_empty() {
-        eprintln!("Nothing to prune.");
+        if args.json {
+            // Empty doc with the same shape as the populated case
+            // so downstream consumers don't have to special-case
+            // "nothing to prune".
+            let action = if args.dry_run {
+                "would-remove"
+            } else {
+                "removed"
+            };
+            let value = serde_json::json!({
+                "action": action,
+                "count": 0,
+                "sessions": [],
+            });
+            let json = if args.compact {
+                serde_json::to_string(&value)
+            } else {
+                serde_json::to_string_pretty(&value)
+            }
+            .map_err(|e| NonoError::ConfigParse(format!("JSON serialization failed: {e}")))?;
+            println!("{json}");
+        } else {
+            eprintln!("Nothing to prune.");
+        }
         return Ok(());
     }
 
@@ -1067,7 +1090,9 @@ pub fn run_prune(args: &PruneArgs) -> Result<()> {
         let events_file = dir.join(format!("{}.events.ndjson", s.session_id));
 
         if args.dry_run {
-            eprintln!("Would remove: {} (started {})", s.session_id, s.started);
+            if !args.json {
+                eprintln!("Would remove: {} (started {})", s.session_id, s.started);
+            }
         } else {
             if let Err(e) = std::fs::remove_file(&session_file) {
                 debug!(
@@ -1085,19 +1110,54 @@ pub fn run_prune(args: &PruneArgs) -> Result<()> {
                     );
                 }
             }
-            eprintln!("Removed: {} (started {})", s.session_id, s.started);
+            if !args.json {
+                eprintln!("Removed: {} (started {})", s.session_id, s.started);
+            }
         }
     }
 
-    eprintln!(
-        "\n{} {} session(s).",
-        if args.dry_run {
-            "Would prune"
+    if args.json {
+        // Same shape as the empty-list branch: action / count /
+        // sessions. Each entry carries session_id + started so
+        // downstream tooling can correlate with previous `nono ps`
+        // snapshots without re-parsing.
+        let action = if args.dry_run {
+            "would-remove"
         } else {
-            "Pruned"
-        },
-        to_remove.len()
-    );
+            "removed"
+        };
+        let entries: Vec<serde_json::Value> = to_remove
+            .iter()
+            .map(|s| {
+                serde_json::json!({
+                    "session_id": s.session_id,
+                    "started": s.started,
+                })
+            })
+            .collect();
+        let value = serde_json::json!({
+            "action": action,
+            "count": to_remove.len(),
+            "sessions": entries,
+        });
+        let json = if args.compact {
+            serde_json::to_string(&value)
+        } else {
+            serde_json::to_string_pretty(&value)
+        }
+        .map_err(|e| NonoError::ConfigParse(format!("JSON serialization failed: {e}")))?;
+        println!("{json}");
+    } else {
+        eprintln!(
+            "\n{} {} session(s).",
+            if args.dry_run {
+                "Would prune"
+            } else {
+                "Pruned"
+            },
+            to_remove.len()
+        );
+    }
 
     Ok(())
 }
