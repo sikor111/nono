@@ -308,6 +308,17 @@
   group name); detail-mode misuse errors at runtime with a
   "drop the group name argument" hint. Conflicts with the
   same output flags as `list --names-only`
+- *(ps)* `--ids-only` is the session-list counterpart, but
+  named for what gets emitted: nono sessions have *both* a
+  `session_id` (the unique hash the rest of the CLI accepts
+  as input) and an optional friendlier `name`, so `--ids-only`
+  is unambiguous about which one ends up on each line. Order
+  matches the resolved filter / sort / reverse pipeline. Lets
+  shell scripts loop over matches:
+  `for sid in $(nono ps --status exited --ids-only); do
+   nono inspect "$sid" --quiet || nono inspect "$sid"; done`.
+  Conflicts with output-emitting flags (`--json` / `--compact`
+  / `--output` / `--field`) and with `--watch` / `--quiet`
 
 ### Observability
 
