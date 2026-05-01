@@ -78,6 +78,10 @@
 - *(why)* `--compact` (requires `--json`) so the compact-vs-pretty
   knob is uniform across every JSON-emitting query/inspection
   command nono ships
+- *(profile)* `show --compact` (requires `--json`) — closes the
+  compact-vs-pretty pattern by extending it to the fourth and last
+  major JSON command. Other profile subcommands (`list`, `groups`,
+  `diff`, `validate`) remain pretty-only for now
 
 ### Observability
 
