@@ -47,6 +47,26 @@
 - *(run)* Append `nono why --command <NAME> [--profile <P>]` hint to
   the `BlockedCommand` error reason so users discover the diagnostic
   flow without leaving the failure message
+- *(ps)* Add `--since <DURATION>` (`30m`/`2h`/`7d`/`1w`) to filter
+  sessions by start time
+- *(prune)* Add `--age <DURATION>` for finer-grained cutoffs than the
+  legacy days-only `--older-than`. Accepts the same shorthand as
+  `nono ps --since`
+- *(ps)* Add `--output ndjson` for line-oriented JSON streaming —
+  pipes cleanly into `jq -c` / fluentd / log aggregators
+- *(ps)* Add `--watch <DURATION>` for top-like polling. Mutually
+  exclusive with `--json` and `--output` since both are batch shapes
+- *(inspect)* Surface the on-disk session file path in human and
+  JSON output via the `session_file` field — saves users re-deriving
+  `~/.nono/sessions/<id>.json` from convention
+- *(cli)* Show actionable hint after `PathNotFound` errors —
+  symmetric with the `BlockedCommand` hint pattern. Points users at
+  `mkdir -p` or `--allow <parent>` for the two ways out
+- *(cli)* Extend the `PathNotFound` hint to also cover
+  `PathCanonicalization` errors whose underlying `io::Error` kind is
+  `NotFound` — covers the `--workdir /missing` / profile-resolved
+  override_deny surface where the lib raises a different variant for
+  the same root cause
 
 ### Observability
 
