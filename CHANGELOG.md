@@ -99,6 +99,25 @@
   human-readable form prints the same table as `--verbose run`.
   Mutually exclusive with `--path` / `--host` / `--net` / `--tcp` /
   `--command` so the flag advertises the short-circuit semantics
+- *(why)* `--tcp-bind <PORT>` is a bind-only counterpart to `--tcp`:
+  resolves only against `localhost_ports` and `tcp_bind_ports`,
+  intentionally ignoring `tcp_connect_ports` so an outbound-only
+  grant can't masquerade as bind authorization. Denials hint at
+  `--allow-port` (not `--allow-connect-port`); the new
+  `tcp_bind_not_allowlisted` reason code distinguishes the verdict
+  for JSON consumers
+- *(ps)* `--header-format {fancy|ascii|none}` controls the table
+  header style for human-readable renders. `fancy` (default) adds a
+  unicode box-drawing divider beneath the column titles, `ascii`
+  swaps in plain dashes for legacy terminals / CI logs, and `none`
+  skips both header and divider so `awk`/`cut` consumers don't have
+  to `tail -n +2`. Has no effect on `--json` or `--output csv|tsv|
+  ndjson`, which keep their existing conventions
+- *(ps)* `--no-truncate` opts out of the COMMAND-column cap (40
+  chars in the default render, 60 in `--short`). Useful when a long
+  argv is what you're actually trying to investigate. Tabular output
+  formats (`csv` / `tsv` / `ndjson` / `json`) already emit the full
+  command and ignore the flag
 
 ### Observability
 
