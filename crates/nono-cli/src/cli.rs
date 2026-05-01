@@ -942,6 +942,14 @@ pub struct ProfileValidateArgs {
     /// `errors`, `warnings`. Requires `--json`.
     #[arg(long, value_name = "PATH", requires = "json")]
     pub field: Option<String>,
+    /// Suppress all stdout and signal validity via exit code:
+    /// `0` valid, `1` invalid (errors present). Cleaner than the
+    /// `--field valid` form when shell scripts only need the
+    /// branch — `nono profile validate p.json --quiet && deploy`.
+    /// Conflicts with output-emitting flags (`--json` /
+    /// `--compact` / `--field`).
+    #[arg(long, conflicts_with_all = &["json", "compact", "field"])]
+    pub quiet: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -3105,6 +3113,57 @@ mod tests {
             assert_eq!(args.field.as_deref(), Some("/session/name"));
         } else {
             panic!("expected Inspect");
+        }
+    }
+
+    #[test]
+    fn profile_validate_quiet_parses_and_conflicts_with_output_modes() {
+        let bare = Cli::try_parse_from(["nono", "profile", "validate", "/tmp/foo.json", "--quiet"])
+            .expect("--quiet alone parses");
+        if let Commands::Profile(args) = bare.command {
+            if let crate::cli::ProfileCommands::Validate(v) = args.command {
+                assert!(v.quiet);
+            } else {
+                panic!("expected Profile::Validate");
+            }
+        } else {
+            panic!("expected Profile");
+        }
+
+        for invocation in [
+            vec![
+                "nono",
+                "profile",
+                "validate",
+                "/tmp/foo.json",
+                "--quiet",
+                "--json",
+            ],
+            vec![
+                "nono",
+                "profile",
+                "validate",
+                "/tmp/foo.json",
+                "--quiet",
+                "--json",
+                "--compact",
+            ],
+            vec![
+                "nono",
+                "profile",
+                "validate",
+                "/tmp/foo.json",
+                "--quiet",
+                "--json",
+                "--field",
+                "valid",
+            ],
+        ] {
+            assert!(
+                Cli::try_parse_from(&invocation).is_err(),
+                "{:?}: --quiet + output flag must be rejected",
+                invocation
+            );
         }
     }
 

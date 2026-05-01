@@ -2423,6 +2423,13 @@ pub(crate) fn cmd_validate(args: ProfileValidateArgs) -> Result<()> {
         check_paths(&profile.filesystem.write, "filesystem.write", &mut warnings);
     }
 
+    if args.quiet {
+        // Short-circuit before any output. The errors-present
+        // condition determines the exit code; warnings don't
+        // influence validity (they're advisory).
+        std::process::exit(if errors.is_empty() { 0 } else { 1 });
+    }
+
     if args.json {
         let val = serde_json::json!({
             "file": target_path.display().to_string(),
@@ -3263,6 +3270,7 @@ mod tests {
             json: false,
             compact: false,
             field: None,
+            quiet: false,
         };
         let result = cmd_validate(args);
         assert!(result.is_ok(), "valid profile should pass validation");
@@ -3286,6 +3294,7 @@ mod tests {
             json: false,
             compact: false,
             field: None,
+            quiet: false,
         };
         let result = cmd_validate(args);
         assert!(result.is_err(), "invalid group should fail validation");
@@ -3310,6 +3319,7 @@ mod tests {
             json: false,
             compact: false,
             field: None,
+            quiet: false,
         };
         let result = cmd_validate(args);
         assert!(
