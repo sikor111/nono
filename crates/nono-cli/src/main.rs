@@ -50,6 +50,7 @@ mod rollback_ui;
 mod sandbox_log;
 mod sandbox_prepare;
 mod sandbox_state;
+mod schema_cmd;
 mod session;
 mod session_commands;
 mod setup;

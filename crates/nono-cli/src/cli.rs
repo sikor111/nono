@@ -58,6 +58,9 @@ const STYLES: Styles = Styles::plain().header(Style::new().bold());
   policy     [deprecated] Use 'nono profile' instead
   profile    Create, inspect, and compare nono profiles
 
+\x1b[1mTOOLING\x1b[0m
+  dry-run-schema  Print the JSON Schema for `--dry-run-json` output
+
 \x1b[1mOPTIONS\x1b[0m
 {options}
 
@@ -507,6 +510,28 @@ IN-BAND DETACH:
   nono profile guide                           # Print profile authoring guide
 ")]
     Profile(ProfileCmdArgs),
+
+    /// Print the JSON Schema describing `--dry-run-json` output. Useful
+    /// for wiring `nono run --dry-run-json` consumers into editor
+    /// integrations or CI policy linters that validate against a
+    /// schema document.
+    #[command(name = "dry-run-schema")]
+    #[command(help_template = "\
+{about}
+
+\x1b[1mUSAGE\x1b[0m
+  nono dry-run-schema [flags]
+
+{all-args}
+{after-help}")]
+    #[command(after_help = "\x1b[1mEXAMPLES\x1b[0m
+  # Print the schema to stdout
+  nono dry-run-schema
+
+  # Write the schema to a file (e.g. for editor JSON-Schema mappings)
+  nono dry-run-schema -o nono-dry-run.schema.json
+")]
+    DryRunSchema(DryRunSchemaArgs),
 
     /// Install a signed nono pack from the registry
     #[command(help_template = "\
@@ -2291,6 +2316,15 @@ pub struct LogsArgs {
 }
 
 #[derive(Parser, Debug)]
+pub struct DryRunSchemaArgs {
+    /// Write the schema to FILE instead of stdout. Useful for
+    /// dropping it into editor configs (e.g. `.vscode/settings.json`
+    /// schema mappings) without manual redirection.
+    #[arg(long, short = 'o', value_name = "FILE")]
+    pub output: Option<std::path::PathBuf>,
+}
+
+#[derive(Parser, Debug)]
 pub struct InspectArgs {
     /// Session ID (or prefix)
     pub session: String,
@@ -3083,6 +3117,27 @@ mod tests {
             with_output.is_err(),
             "--watch + --output must conflict — interactive mode vs batch render"
         );
+    }
+
+    #[test]
+    fn dry_run_schema_parses_with_and_without_output() {
+        let bare = Cli::try_parse_from(["nono", "dry-run-schema"]).expect("bare parse");
+        if let Commands::DryRunSchema(args) = bare.command {
+            assert!(args.output.is_none(), "default writes to stdout");
+        } else {
+            panic!("expected DryRunSchema");
+        }
+
+        let with_output = Cli::try_parse_from(["nono", "dry-run-schema", "-o", "/tmp/schema.json"])
+            .expect("--output parses");
+        if let Commands::DryRunSchema(args) = with_output.command {
+            assert_eq!(
+                args.output.as_deref().map(|p| p.to_str().unwrap_or("")),
+                Some("/tmp/schema.json"),
+            );
+        } else {
+            panic!("expected DryRunSchema");
+        }
     }
 
     #[test]
@@ -4208,9 +4263,30 @@ mod tests {
     /// All subcommand names that must appear in the root help template.
     /// If you add a new command to the `Commands` enum, add it here too.
     const ALL_SUBCOMMANDS: &[&str] = &[
-        "setup", "run", "shell", "wrap", "learn", "why", "ps", "stop", "detach", "attach", "logs",
-        "inspect", "session", "rollback", "audit", "trust", "policy", "profile", "pull", "remove",
-        "update", "search", "list",
+        "setup",
+        "run",
+        "shell",
+        "wrap",
+        "learn",
+        "why",
+        "ps",
+        "stop",
+        "detach",
+        "attach",
+        "logs",
+        "inspect",
+        "session",
+        "rollback",
+        "audit",
+        "trust",
+        "policy",
+        "profile",
+        "dry-run-schema",
+        "pull",
+        "remove",
+        "update",
+        "search",
+        "list",
     ];
 
     #[test]

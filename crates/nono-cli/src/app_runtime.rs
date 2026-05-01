@@ -92,6 +92,9 @@ fn dispatch_command(
         Commands::Profile(args) => {
             run_command_with_update(update_handle, silent, || profile_cmd::run_profile(args))
         }
+        Commands::DryRunSchema(args) => run_command_with_update(update_handle, silent, || {
+            crate::schema_cmd::run_dry_run_schema(&args)
+        }),
         Commands::Pull(args) => {
             run_command_with_update(update_handle, silent, || package_cmd::run_pull(args))
         }

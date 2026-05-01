@@ -182,6 +182,7 @@ fn cli_verbosity(cli: &Cli) -> u8 {
         | Commands::Prune(_)
         | Commands::Policy(_)
         | Commands::Profile(_)
+        | Commands::DryRunSchema(_)
         | Commands::OpenUrlHelper(_) => 0,
     }
 }
