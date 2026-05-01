@@ -358,6 +358,22 @@
   `load_profile_no_migrate`. Conflicts with the structured-
   output / single-shot modes (`--json` / `--compact` /
   `--field` / `--quiet`)
+- *(why)* `--watch <DURATION>` and `--max-iterations <N>`
+  refresh the verdict on a fixed cadence — top-like polling
+  for the resolution side of the workflow. Use case: edit a
+  profile in `$EDITOR` while a second terminal runs
+  `nono why --command rm -rf /tmp --profile editing.json
+  --watch 1s` — the verdict (`ALLOWED` / `BLOCKED` plus
+  reason / source) flips the moment the edit lands, giving
+  immediate confirmation that the policy you're shaping
+  actually denies what you intended. Same clear-screen +
+  banner convention as the four other watch surfaces. Stays
+  compatible with `--print-policy`: watching the resolved
+  CapabilitySet evolve is exactly the editing workflow this
+  enables. Conflicts with the structured-output / quiet modes
+  (`--json` / `--compact` / `--field` / `--quiet`) since
+  those expect a single-shot render. Fifth `--watch` surface
+  on the CLI
 
 ### Observability
 
