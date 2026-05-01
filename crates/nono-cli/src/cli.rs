@@ -2132,6 +2132,12 @@ pub struct InspectArgs {
     #[arg(long)]
     pub json: bool,
 
+    /// Emit compact JSON (no whitespace / indentation) instead of the
+    /// default pretty-printed form. Useful for streaming or piping into
+    /// `jq -c`. Has no effect without `--json`.
+    #[arg(long, requires = "json")]
+    pub compact: bool,
+
     /// Include the event log alongside the session metadata.
     /// In human-readable mode an `EVENTS` section is appended;
     /// in `--json` mode the document becomes
@@ -2515,6 +2521,25 @@ mod tests {
         assert!(!help.contains("--upstream-bypass"));
         assert!(!help.contains("--proxy-port"));
         assert!(!help.contains("--allow-net"));
+    }
+
+    #[test]
+    fn inspect_compact_requires_json_flag() {
+        // `--compact` only makes sense for the JSON output path —
+        // there's no "compact" form for the human-readable text. clap
+        // should reject the flag without `--json` so the dependency is
+        // surfaced at parse time.
+        let bare = Cli::try_parse_from(["nono", "inspect", "abc", "--compact"]);
+        assert!(bare.is_err(), "--compact without --json must fail to parse");
+
+        let with_json =
+            Cli::try_parse_from(["nono", "inspect", "abc", "--json", "--compact"]).expect("parse");
+        if let Commands::Inspect(args) = with_json.command {
+            assert!(args.json);
+            assert!(args.compact);
+        } else {
+            panic!("expected Inspect");
+        }
     }
 
     #[test]

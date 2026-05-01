@@ -734,8 +734,12 @@ pub fn run_inspect(args: &InspectArgs) -> Result<()> {
                 })
             }
         };
-        let json = serde_json::to_string_pretty(&value)
-            .map_err(|e| NonoError::ConfigParse(format!("JSON serialization failed: {e}")))?;
+        let json = if args.compact {
+            serde_json::to_string(&value)
+        } else {
+            serde_json::to_string_pretty(&value)
+        }
+        .map_err(|e| NonoError::ConfigParse(format!("JSON serialization failed: {e}")))?;
         println!("{json}");
         return Ok(());
     }
