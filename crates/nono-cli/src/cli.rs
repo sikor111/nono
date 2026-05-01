@@ -2362,6 +2362,23 @@ pub struct DryRunSchemaArgs {
     /// schema mappings) without manual redirection.
     #[arg(long, short = 'o', value_name = "FILE")]
     pub output: Option<std::path::PathBuf>,
+
+    /// Extract a single field from the schema document instead of
+    /// emitting the whole thing — same `jq -r`-lite semantics as
+    /// the other `--field` surfaces. Common use:
+    /// `nono dry-run-schema --field /properties/schema_version/const`
+    /// asserts the runtime schema version without parsing the doc
+    /// in shell. Conflicts with `--output` (the latter writes the
+    /// full doc to a file).
+    #[arg(long, value_name = "PATH", conflicts_with = "output")]
+    pub field: Option<String>,
+
+    /// Emit composite extracted values as compact JSON. Has no
+    /// effect on primitive --field results (always raw) and no
+    /// effect when --field is unset (the schema is always emitted
+    /// pretty, since the raw literal is multi-line).
+    #[arg(long, requires = "field")]
+    pub compact: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -3260,6 +3277,8 @@ mod tests {
         let bare = Cli::try_parse_from(["nono", "dry-run-schema"]).expect("bare parse");
         if let Commands::DryRunSchema(args) = bare.command {
             assert!(args.output.is_none(), "default writes to stdout");
+            assert!(args.field.is_none());
+            assert!(!args.compact);
         } else {
             panic!("expected DryRunSchema");
         }
@@ -3274,6 +3293,41 @@ mod tests {
         } else {
             panic!("expected DryRunSchema");
         }
+
+        // --field parses by itself.
+        let with_field = Cli::try_parse_from([
+            "nono",
+            "dry-run-schema",
+            "--field",
+            "/properties/schema_version/const",
+        ])
+        .expect("--field parses");
+        if let Commands::DryRunSchema(args) = with_field.command {
+            assert_eq!(
+                args.field.as_deref(),
+                Some("/properties/schema_version/const")
+            );
+        } else {
+            panic!("expected DryRunSchema");
+        }
+
+        // --compact requires --field (no point pretty-vs-compact
+        // when we're just emitting the static schema literal).
+        let bare_compact = Cli::try_parse_from(["nono", "dry-run-schema", "--compact"]);
+        assert!(bare_compact.is_err(), "--compact requires --field");
+
+        // --field + --output are mutually exclusive: the latter
+        // writes the full doc to a file, the former extracts a
+        // sub-value to stdout. Combining them is ambiguous.
+        let with_both = Cli::try_parse_from([
+            "nono",
+            "dry-run-schema",
+            "--field",
+            "title",
+            "--output",
+            "/tmp/foo.json",
+        ]);
+        assert!(with_both.is_err(), "--field + --output must conflict");
     }
 
     #[test]

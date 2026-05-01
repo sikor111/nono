@@ -155,9 +155,22 @@ const DRY_RUN_JSON_SCHEMA: &str = r#"{
 }
 "#;
 
-/// Dispatch `nono dry-run-schema`. Either prints the schema to stdout
-/// or writes it to the path given by `--output`.
+/// Dispatch `nono dry-run-schema`. Either prints the schema to stdout,
+/// writes it to the path given by `--output`, or extracts one field
+/// from it via `--field` (mutually exclusive with `--output`).
 pub fn run_dry_run_schema(args: &DryRunSchemaArgs) -> Result<()> {
+    if let Some(ref field) = args.field {
+        // Parse the static schema once, navigate to the requested
+        // field, render it with the shared jq-r-lite extractor.
+        // Same shell-friendly semantics as the rest of the --field
+        // surfaces: primitives raw, composites JSON honoring
+        // --compact.
+        let value: serde_json::Value = serde_json::from_str(DRY_RUN_JSON_SCHEMA)
+            .map_err(|e| NonoError::ConfigParse(format!("Failed to parse schema document: {e}")))?;
+        let extracted = crate::field_extract::extract_field_output(&value, field, args.compact)?;
+        println!("{extracted}");
+        return Ok(());
+    }
     match args.output.as_deref() {
         Some(path) => {
             std::fs::write(path, DRY_RUN_JSON_SCHEMA).map_err(|e| {
