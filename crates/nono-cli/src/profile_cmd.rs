@@ -376,8 +376,16 @@ pub(crate) fn cmd_groups(args: ProfileGroupsArgs) -> Result<()> {
     let pol = policy::load_embedded_policy()?;
 
     match args.name {
-        Some(name) => cmd_groups_detail(&pol, &name, args.json, args.compact),
-        None => cmd_groups_list(&pol, args.json, args.compact, args.all_platforms),
+        Some(name) => {
+            cmd_groups_detail(&pol, &name, args.json, args.compact, args.field.as_deref())
+        }
+        None => cmd_groups_list(
+            &pol,
+            args.json,
+            args.compact,
+            args.all_platforms,
+            args.field.as_deref(),
+        ),
     }
 }
 
@@ -386,6 +394,7 @@ fn cmd_groups_list(
     json: bool,
     compact: bool,
     all_platforms: bool,
+    field: Option<&str>,
 ) -> Result<()> {
     let mut groups: Vec<(&String, &Group)> = pol.groups.iter().collect();
     groups.sort_by_key(|(name, _)| name.as_str());
@@ -409,6 +418,14 @@ fn cmd_groups_list(
             })
             .collect();
         let val = serde_json::Value::Array(arr);
+        if let Some(field) = field {
+            // Same shell-friendly extraction as `profile show --field`.
+            // For the array shape, JSON Pointer paths like `/0/name`
+            // reach individual entries.
+            let extracted = crate::field_extract::extract_field_output(&val, field, compact)?;
+            println!("{extracted}");
+            return Ok(());
+        }
         let rendered = if compact {
             to_json_compact(&val)?
         } else {
@@ -446,7 +463,13 @@ fn cmd_groups_list(
     Ok(())
 }
 
-fn cmd_groups_detail(pol: &policy::Policy, name: &str, json: bool, compact: bool) -> Result<()> {
+fn cmd_groups_detail(
+    pol: &policy::Policy,
+    name: &str,
+    json: bool,
+    compact: bool,
+    field: Option<&str>,
+) -> Result<()> {
     let group = pol.groups.get(name).ok_or_else(|| {
         NonoError::ProfileParse(format!(
             "group '{}' not found in policy.json. Use `nono profile groups` to list available groups",
@@ -456,6 +479,11 @@ fn cmd_groups_detail(pol: &policy::Policy, name: &str, json: bool, compact: bool
 
     if json {
         let val = group_to_json(name, group);
+        if let Some(field) = field {
+            let extracted = crate::field_extract::extract_field_output(&val, field, compact)?;
+            println!("{extracted}");
+            return Ok(());
+        }
         let rendered = if compact {
             to_json_compact(&val)?
         } else {
@@ -3054,7 +3082,7 @@ mod tests {
     #[test]
     fn test_groups_unknown_errors() {
         let pol = policy::load_embedded_policy().expect("should load policy");
-        let result = cmd_groups_detail(&pol, "nonexistent_group_xyz", false, false);
+        let result = cmd_groups_detail(&pol, "nonexistent_group_xyz", false, false, None);
         assert!(result.is_err());
     }
 
