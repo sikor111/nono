@@ -896,6 +896,14 @@ pub struct ProfileValidateArgs {
     /// without `--json`.
     #[arg(long, requires = "json")]
     pub compact: bool,
+    /// Extract a single field from the JSON output instead of emitting
+    /// the whole document — same `jq -r`-lite semantics as
+    /// `nono profile show --field`. Useful for scripting:
+    /// `if [ "$(nono profile validate <file> --json --field valid)" =
+    /// "true" ]; then …`. Top-level keys are `file`, `valid`,
+    /// `errors`, `warnings`. Requires `--json`.
+    #[arg(long, value_name = "PATH", requires = "json")]
+    pub field: Option<String>,
 }
 
 #[derive(Parser, Debug)]
@@ -2924,6 +2932,39 @@ mod tests {
             assert_eq!(args.field.as_deref(), Some("/session/name"));
         } else {
             panic!("expected Inspect");
+        }
+    }
+
+    #[test]
+    fn profile_validate_field_requires_json_and_parses_path_forms() {
+        let bare = Cli::try_parse_from([
+            "nono",
+            "profile",
+            "validate",
+            "/tmp/foo.json",
+            "--field",
+            "valid",
+        ]);
+        assert!(bare.is_err(), "--field without --json must fail to parse");
+
+        let with_json = Cli::try_parse_from([
+            "nono",
+            "profile",
+            "validate",
+            "/tmp/foo.json",
+            "--json",
+            "--field",
+            "valid",
+        ])
+        .expect("parses");
+        if let Commands::Profile(args) = with_json.command {
+            if let crate::cli::ProfileCommands::Validate(v) = args.command {
+                assert_eq!(v.field.as_deref(), Some("valid"));
+            } else {
+                panic!("expected Profile::Validate");
+            }
+        } else {
+            panic!("expected Profile");
         }
     }
 

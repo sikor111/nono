@@ -2332,6 +2332,18 @@ pub(crate) fn cmd_validate(args: ProfileValidateArgs) -> Result<()> {
             "errors": errors,
             "warnings": warnings,
         });
+        if let Some(ref field) = args.field {
+            // Same shell-friendly extraction as `profile show --field`.
+            // Common scripted usage: `--field valid` returns "true" /
+            // "false" as a bare bool literal — perfect for shell
+            // string comparisons.
+            let extracted = crate::field_extract::extract_field_output(&val, field, args.compact)?;
+            println!("{extracted}");
+            if !errors.is_empty() {
+                return Err(NonoError::ProfileParse("validation failed".into()));
+            }
+            return Ok(());
+        }
         let rendered = if args.compact {
             to_json_compact(&val)?
         } else {
@@ -3152,6 +3164,7 @@ mod tests {
             file: path,
             json: false,
             compact: false,
+            field: None,
         };
         let result = cmd_validate(args);
         assert!(result.is_ok(), "valid profile should pass validation");
@@ -3174,6 +3187,7 @@ mod tests {
             file: path,
             json: false,
             compact: false,
+            field: None,
         };
         let result = cmd_validate(args);
         assert!(result.is_err(), "invalid group should fail validation");
@@ -3197,6 +3211,7 @@ mod tests {
             file: path,
             json: false,
             compact: false,
+            field: None,
         };
         let result = cmd_validate(args);
         assert!(
