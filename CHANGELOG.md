@@ -388,6 +388,37 @@
   `ProfileParse` error with a `--list-sections` hint, mirror-
   ing the `--section <NAME>` miss path. Conflicts with
   `--section` and `--list-sections` (different display modes)
+- *(profile)* `groups --search <KEYWORD>` filters the policy-
+  group catalogue to those whose name, description, or any
+  path / command in `allow.{read,write,readwrite}`,
+  `deny.access`, or `deny.commands` contains the keyword as a
+  case-insensitive substring. Each surviving entry is annot-
+  ated with `[matched in: <fields>]` so it is clear which
+  field carried the hit — useful when investigating "which
+  groups grant access to /etc?" without cracking open
+  policy.json. Composes with `--names-only`:
+  `for g in $(nono profile groups --search etc --names-only);
+   do nono profile groups "$g"; done` walks every relevant
+  group and prints its full detail. List-shape only — passing
+  both a group-name argument and `--search` is rejected at
+  runtime. Empty match returns a `ProfileParse` error.
+  Conflicts with `--json` / `--compact` / `--field` (human-
+  only). Second `--search` surface
+- *(profile)* `list --search <KEYWORD>` filters the profile
+  catalogue (built-in + pack + user buckets) to those whose
+  name, description, `extends:` chain, on-disk source, or
+  providing pack contains the keyword as a case-insensitive
+  substring. Each match keeps its bucket heading and is
+  annotated with `[matched in: <fields>]` — the `extends`
+  hit is especially useful for visualising inheritance
+  chains (`--search default` reveals every profile that
+  extends `default`). Composes with `--names-only` for
+  shell-loop ergonomics. Conflicts with `--json` / `--compact`
+  / `--field`. Field order in the annotation is fixed (name
+  → description → extends → source → pack) so output is
+  deterministic. Third `--search` surface, completing the
+  triplet across the three discoverable profile catalogues
+  (guide / groups / profiles)
 
 ### Observability
 
