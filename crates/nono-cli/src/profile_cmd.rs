@@ -956,6 +956,46 @@ fn profile_source(name: &str) -> &'static str {
     }
 }
 
+/// Substring-match `needle` (already lowercased) against the
+/// profile-list fields and return the labels of every field that
+/// hit. Pure helper so the matching logic is unit-testable
+/// without touching the embedded profile catalogue. Field order
+/// is fixed (name → description → extends → source → pack) so
+/// the rendered `[matched in: …]` line is deterministic.
+fn match_profile_fields(
+    name: &str,
+    description: Option<&str>,
+    extends: &[String],
+    source: &str,
+    pack: Option<&str>,
+    needle_lower: &str,
+) -> Vec<&'static str> {
+    let mut out: Vec<&'static str> = Vec::new();
+    if name.to_lowercase().contains(needle_lower) {
+        out.push("name");
+    }
+    if let Some(d) = description {
+        if d.to_lowercase().contains(needle_lower) {
+            out.push("description");
+        }
+    }
+    if extends
+        .iter()
+        .any(|e| e.to_lowercase().contains(needle_lower))
+    {
+        out.push("extends");
+    }
+    if source.to_lowercase().contains(needle_lower) {
+        out.push("source");
+    }
+    if let Some(p) = pack {
+        if p.to_lowercase().contains(needle_lower) {
+            out.push("pack");
+        }
+    }
+    out
+}
+
 pub(crate) fn cmd_list(args: ProfileListArgs) -> Result<()> {
     let builtin_names = profile::builtin::list_builtin();
     let all_names = profile::list_profiles();
@@ -985,6 +1025,119 @@ pub(crate) fn cmd_list(args: ProfileListArgs) -> Result<()> {
         } else {
             user_profiles.push((name.clone(), p));
         }
+    }
+
+    if let Some(needle) = args.search.as_deref() {
+        let q = needle.to_lowercase();
+
+        // Match each bucket independently so we keep the same
+        // built-in → packs → user grouping in the rendered output;
+        // users rely on that ordering for shell pipelines and to
+        // recognize where a profile lives.
+        let m_builtin: Vec<(&String, &Result<Profile>, Vec<&'static str>)> = builtin_profiles
+            .iter()
+            .filter_map(|(name, result)| {
+                let source = profile_source(name);
+                let extends = profile::load_profile_extends(name).unwrap_or_default();
+                let desc = result
+                    .as_ref()
+                    .ok()
+                    .and_then(|p| p.meta.description.as_deref());
+                let m = match_profile_fields(name, desc, &extends, source, None, &q);
+                if m.is_empty() {
+                    None
+                } else {
+                    Some((name, result, m))
+                }
+            })
+            .collect();
+        let m_pack: Vec<(&String, &String, &Result<Profile>, Vec<&'static str>)> = pack_entries
+            .iter()
+            .filter_map(|(name, pack, result)| {
+                let source = profile_source(name);
+                let extends = profile::load_profile_extends(name).unwrap_or_default();
+                let desc = result
+                    .as_ref()
+                    .ok()
+                    .and_then(|p| p.meta.description.as_deref());
+                let m = match_profile_fields(name, desc, &extends, source, Some(pack), &q);
+                if m.is_empty() {
+                    None
+                } else {
+                    Some((name, pack, result, m))
+                }
+            })
+            .collect();
+        let m_user: Vec<(&String, &Result<Profile>, Vec<&'static str>)> = user_profiles
+            .iter()
+            .filter_map(|(name, result)| {
+                let source = profile_source(name);
+                let extends = profile::load_profile_extends(name).unwrap_or_default();
+                let desc = result
+                    .as_ref()
+                    .ok()
+                    .and_then(|p| p.meta.description.as_deref());
+                let m = match_profile_fields(name, desc, &extends, source, None, &q);
+                if m.is_empty() {
+                    None
+                } else {
+                    Some((name, result, m))
+                }
+            })
+            .collect();
+
+        let total = m_builtin.len() + m_pack.len() + m_user.len();
+        if total == 0 {
+            return Err(NonoError::ProfileParse(format!(
+                "no profiles match {needle:?}. Use `nono profile list` \
+                 to see all profiles"
+            )));
+        }
+
+        if args.names_only {
+            for (name, _, _) in &m_builtin {
+                println!("{name}");
+            }
+            for (name, _, _, _) in &m_pack {
+                println!("{name}");
+            }
+            for (name, _, _) in &m_user {
+                println!("{name}");
+            }
+            return Ok(());
+        }
+
+        let t = theme::current();
+        println!("{}: {} profiles matching {:?}", prefix(), total, needle);
+
+        if !m_builtin.is_empty() {
+            println!();
+            println!("  {}", theme::fg("Built-in:", t.subtext).bold());
+            for (name, result, where_matched) in &m_builtin {
+                print_profile_line(name, result, t);
+                println!("    [matched in: {}]", where_matched.join(", "));
+            }
+        }
+        if !m_pack.is_empty() {
+            println!();
+            println!("  {}", theme::fg("Packs:", t.subtext).bold());
+            for (name, pack_ref, result, where_matched) in &m_pack {
+                print_pack_profile_line(name, pack_ref, result, t);
+                println!("    [matched in: {}]", where_matched.join(", "));
+            }
+        }
+        if !m_user.is_empty() {
+            println!();
+            println!(
+                "  {}",
+                theme::fg("User (~/.config/nono/profiles/):", t.subtext).bold()
+            );
+            for (name, result, where_matched) in &m_user {
+                print_profile_line(name, result, t);
+                println!("    [matched in: {}]", where_matched.join(", "));
+            }
+        }
+        return Ok(());
     }
 
     if args.names_only {
@@ -3789,5 +3942,72 @@ Second body.
         let hits = search_groups(&groups, "etc");
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].2, vec!["name", "description", "allow.read"]);
+    }
+
+    #[test]
+    fn match_profile_fields_hits_every_field_independently() {
+        // Each call lands in a different field — verifies every
+        // documented match path actually wires up.
+        let extends = vec!["base".to_string(), "default".to_string()];
+
+        // name only
+        assert_eq!(
+            match_profile_fields("rust-dev", None, &[], "", None, "rust"),
+            vec!["name"]
+        );
+        // description only (case-insensitive)
+        assert_eq!(
+            match_profile_fields("p", Some("Rust SDK profile"), &[], "", None, "sdk"),
+            vec!["description"]
+        );
+        // extends only (substring against any chain entry)
+        assert_eq!(
+            match_profile_fields("p", None, &extends, "", None, "default"),
+            vec!["extends"]
+        );
+        // source only
+        assert_eq!(
+            match_profile_fields("p", None, &[], "user (overrides built-in)", None, "user"),
+            vec!["source"]
+        );
+        // pack only
+        assert_eq!(
+            match_profile_fields("p", None, &[], "", Some("always-further/example"), "always"),
+            vec!["pack"]
+        );
+    }
+
+    #[test]
+    fn match_profile_fields_orders_labels_deterministically() {
+        // Multiple hits in one entry must come out in the documented
+        // fixed order: name → description → extends → source → pack.
+        // Tests rely on this for stable assertions and the rendered
+        // `[matched in: …]` line should be predictable for users.
+        let extends = vec!["foo".to_string()];
+        let labels = match_profile_fields(
+            "foo-profile",
+            Some("foo description"),
+            &extends,
+            "foo/source",
+            Some("foo/pack"),
+            "foo",
+        );
+        assert_eq!(
+            labels,
+            vec!["name", "description", "extends", "source", "pack"]
+        );
+    }
+
+    #[test]
+    fn match_profile_fields_returns_empty_on_miss() {
+        assert!(match_profile_fields(
+            "p",
+            Some("desc"),
+            &["base".to_string()],
+            "src",
+            Some("pack"),
+            "no_such_thing"
+        )
+        .is_empty());
     }
 }
