@@ -803,6 +803,23 @@ pub struct ProfileSchemaArgs {
     /// Write schema to a file instead of stdout
     #[arg(long, short)]
     pub output: Option<PathBuf>,
+
+    /// Extract a single field from the schema document instead of
+    /// emitting the whole thing — same `jq -r`-lite semantics as
+    /// the other `--field` surfaces. Common use:
+    /// `nono profile schema --field /properties/security/type`
+    /// reads one piece of the schema without parsing it in shell.
+    /// Conflicts with `--output` (the latter writes the full doc
+    /// to a file).
+    #[arg(long, value_name = "PATH", conflicts_with = "output")]
+    pub field: Option<String>,
+
+    /// Emit composite extracted values as compact JSON. Has no
+    /// effect on primitive --field results (always raw) and no
+    /// effect when --field is unset (the schema is always emitted
+    /// pretty by the embedded source).
+    #[arg(long, requires = "field")]
+    pub compact: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -3270,6 +3287,45 @@ mod tests {
             with_output.is_err(),
             "--watch + --output must conflict — interactive mode vs batch render"
         );
+    }
+
+    #[test]
+    fn profile_schema_field_parses_and_conflicts_with_output() {
+        // --field parses by itself.
+        let with_field = Cli::try_parse_from([
+            "nono",
+            "profile",
+            "schema",
+            "--field",
+            "/properties/security/type",
+        ])
+        .expect("--field parses");
+        if let Commands::Profile(args) = with_field.command {
+            if let crate::cli::ProfileCommands::Schema(s) = args.command {
+                assert_eq!(s.field.as_deref(), Some("/properties/security/type"));
+            } else {
+                panic!("expected Profile::Schema");
+            }
+        } else {
+            panic!("expected Profile");
+        }
+
+        // --compact requires --field.
+        let bare_compact = Cli::try_parse_from(["nono", "profile", "schema", "--compact"]);
+        assert!(bare_compact.is_err(), "--compact requires --field");
+
+        // --field + --output mutually exclusive — same rationale as
+        // dry-run-schema (file vs sub-value rendering modes).
+        let with_both = Cli::try_parse_from([
+            "nono",
+            "profile",
+            "schema",
+            "--field",
+            "title",
+            "--output",
+            "/tmp/foo.json",
+        ]);
+        assert!(with_both.is_err(), "--field + --output must conflict");
     }
 
     #[test]

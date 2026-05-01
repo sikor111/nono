@@ -327,6 +327,18 @@ fn extends_target_not_found_message(name: &str) -> String {
 fn cmd_schema(args: ProfileSchemaArgs) -> Result<()> {
     let schema = embedded::embedded_profile_schema();
 
+    if let Some(ref field) = args.field {
+        // Same shell-friendly extraction as the rest of the --field
+        // surfaces. Parse the embedded schema once, navigate via
+        // JSON Pointer, render through the shared jq-r-lite helper.
+        let value: serde_json::Value = serde_json::from_str(schema).map_err(|e| {
+            NonoError::ProfileParse(format!("Failed to parse schema document: {e}"))
+        })?;
+        let extracted = crate::field_extract::extract_field_output(&value, field, args.compact)?;
+        println!("{extracted}");
+        return Ok(());
+    }
+
     match args.output {
         Some(path) => {
             fs::write(&path, schema).map_err(|e| {
