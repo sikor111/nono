@@ -2077,6 +2077,13 @@ pub struct PsArgs {
         conflicts_with_all = &["json", "output"],
     )]
     pub watch: Option<String>,
+
+    /// Emit compact JSON (no whitespace / indentation) instead of the
+    /// default pretty-printed array. Useful for streaming the session
+    /// list into `jq -c`. Has no effect without `--json` — use
+    /// `--output ndjson` if you want one record per line.
+    #[arg(long, requires = "json")]
+    pub compact: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -2579,6 +2586,24 @@ mod tests {
             assert_eq!(args.logs_tail, None);
         } else {
             panic!("expected Inspect command");
+        }
+    }
+
+    #[test]
+    fn ps_compact_requires_json_flag() {
+        // Mirror of inspect's `--compact` ergonomics: no `--json`,
+        // no `--compact` — the human table doesn't have a "compact"
+        // form (that's what `--short` is). Letting `--compact` parse
+        // without `--json` would silently ignore it.
+        let bare = Cli::try_parse_from(["nono", "ps", "--compact"]);
+        assert!(bare.is_err(), "--compact without --json must fail to parse");
+
+        let with_json = Cli::try_parse_from(["nono", "ps", "--json", "--compact"]).expect("parse");
+        if let Commands::Ps(args) = with_json.command {
+            assert!(args.json);
+            assert!(args.compact);
+        } else {
+            panic!("expected Ps");
         }
     }
 

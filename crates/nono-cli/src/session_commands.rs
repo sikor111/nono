@@ -102,8 +102,12 @@ fn print_ps_table_once(args: &PsArgs) -> Result<()> {
     }
 
     if args.json {
-        let json = serde_json::to_string_pretty(&filtered)
-            .map_err(|e| nono::NonoError::ConfigParse(format!("JSON serialization failed: {e}")))?;
+        let json = if args.compact {
+            serde_json::to_string(&filtered)
+        } else {
+            serde_json::to_string_pretty(&filtered)
+        }
+        .map_err(|e| nono::NonoError::ConfigParse(format!("JSON serialization failed: {e}")))?;
         println!("{json}");
         return Ok(());
     }
@@ -1060,6 +1064,7 @@ mod tests {
             short: false,
             output: None,
             watch: None,
+            compact: false,
         }
     }
 
