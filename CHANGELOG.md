@@ -225,6 +225,13 @@
   `--output` (which writes the full doc); `--compact`
   controls how composite extracted values render and itself
   requires `--field`
+- *(profile)* `schema --field <PATH>` is symmetric to
+  `dry-run-schema --field` for the embedded profile JSON
+  Schema. Eleventh `--field` surface across the CLI. Same
+  semantics: `--field` conflicts with `--output`, `--compact`
+  requires `--field`. Common use: `nono profile schema
+  --field title` returns "nono Profile" without piping the
+  full doc through `jq`
 
 ### Observability
 
