@@ -2534,6 +2534,15 @@ pub struct InspectArgs {
     /// / `--field` / `--events`).
     #[arg(long, conflicts_with_all = &["json", "compact", "field", "events"])]
     pub quiet: bool,
+
+    /// Emit the raw on-disk session JSON without going through
+    /// nono's parse + reserialize step. Useful for diagnosing
+    /// schema-evolution issues — preserves any unknown fields
+    /// that the strict deserializer would reject. Conflicts with
+    /// the structured output flags (`--json` / `--compact` /
+    /// `--field` / `--events` / `--quiet`).
+    #[arg(long, conflicts_with_all = &["json", "compact", "field", "events", "quiet"])]
+    pub raw: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -3130,6 +3139,33 @@ mod tests {
             assert_eq!(args.field.as_deref(), Some("/result/reason"));
         } else {
             panic!("expected Why");
+        }
+    }
+
+    #[test]
+    fn inspect_raw_parses_and_conflicts_with_structured_output_modes() {
+        let bare = Cli::try_parse_from(["nono", "inspect", "abc123", "--raw"])
+            .expect("--raw alone parses");
+        if let Commands::Inspect(args) = bare.command {
+            assert!(args.raw);
+        } else {
+            panic!("expected Inspect");
+        }
+
+        for invocation in [
+            vec!["nono", "inspect", "abc123", "--raw", "--json"],
+            vec!["nono", "inspect", "abc123", "--raw", "--json", "--compact"],
+            vec![
+                "nono", "inspect", "abc123", "--raw", "--json", "--field", "status",
+            ],
+            vec!["nono", "inspect", "abc123", "--raw", "--events"],
+            vec!["nono", "inspect", "abc123", "--raw", "--quiet"],
+        ] {
+            assert!(
+                Cli::try_parse_from(&invocation).is_err(),
+                "{:?}: --raw + structured-output flag must be rejected",
+                invocation
+            );
         }
     }
 

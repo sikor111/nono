@@ -887,6 +887,23 @@ pub fn run_inspect(args: &InspectArgs) -> Result<()> {
     // without the user re-deriving the path from the session_id.
     let session_file = session::session_file_path(&record.session_id)?;
 
+    if args.raw {
+        // Skip parse + reserialize; emit the on-disk JSON
+        // verbatim. Useful for diagnosing schema-evolution
+        // (preserves any unknown fields that the strict
+        // deserializer would reject for actual loading).
+        let contents =
+            std::fs::read_to_string(&session_file).map_err(|e| NonoError::ConfigRead {
+                path: session_file.clone(),
+                source: e,
+            })?;
+        // Single print! so the file's existing trailing
+        // newline (or lack thereof) is preserved byte-for-
+        // byte — rebuilding via println would alter that.
+        print!("{contents}");
+        return Ok(());
+    }
+
     // When --events is set, eagerly read the event log so both human and
     // JSON modes can use the same data. A missing log is not an error
     // (the session may have exited before any events were written) — we
