@@ -2292,6 +2292,15 @@ pub struct PsArgs {
         conflicts_with = "short"
     )]
     pub columns: Vec<PsColumn>,
+
+    /// Extract a single field from the JSON output instead of emitting
+    /// the whole array — same `jq -r`-lite semantics as other
+    /// `--field` surfaces. The session list is an array, so JSON
+    /// Pointer paths like `/0/name`, `/0/session_id`, or `/0/profile`
+    /// reach individual entries; `0` returns the first entry as JSON.
+    /// Requires `--json`; has no effect on `--output csv|tsv|ndjson`.
+    #[arg(long, value_name = "PATH", requires = "json")]
+    pub field: Option<String>,
 }
 
 #[derive(Parser, Debug)]
@@ -3231,6 +3240,23 @@ mod tests {
             );
         } else {
             panic!("expected DryRunSchema");
+        }
+    }
+
+    #[test]
+    fn ps_field_requires_json_and_parses_path_forms() {
+        // Same shell-friendly extraction as profile / inspect / why
+        // --field. Without --json there's no JSON document to
+        // navigate, so clap rejects.
+        let bare = Cli::try_parse_from(["nono", "ps", "--field", "/0/name"]);
+        assert!(bare.is_err(), "--field without --json must fail to parse");
+
+        let with_json = Cli::try_parse_from(["nono", "ps", "--json", "--field", "/0/session_id"])
+            .expect("pointer path parses");
+        if let Commands::Ps(args) = with_json.command {
+            assert_eq!(args.field.as_deref(), Some("/0/session_id"));
+        } else {
+            panic!("expected Ps");
         }
     }
 

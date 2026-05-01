@@ -260,6 +260,20 @@ fn print_ps_table_once(args: &PsArgs) -> Result<()> {
     }
 
     if args.json {
+        if let Some(ref field) = args.field {
+            // `--field` short-circuits the full-document render. The
+            // session list is an array, so JSON Pointer paths like
+            // `/0/name` reach individual entries (and `/0` returns
+            // the first entry as JSON). Same shell-friendly
+            // semantics as the other --field surfaces.
+            let value = serde_json::to_value(&filtered).map_err(|e| {
+                nono::NonoError::ConfigParse(format!("JSON serialization failed: {e}"))
+            })?;
+            let extracted =
+                crate::field_extract::extract_field_output(&value, field, args.compact)?;
+            println!("{extracted}");
+            return Ok(());
+        }
         let json = if args.compact {
             serde_json::to_string(&filtered)
         } else {
@@ -1225,6 +1239,7 @@ mod tests {
             header_format: PsHeaderFormat::Fancy,
             no_truncate: false,
             columns: Vec::new(),
+            field: None,
         }
     }
 
