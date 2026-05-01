@@ -159,6 +159,13 @@
   (`--columns command,session` puts COMMAND first). Conflicts
   with `--short`. Machine outputs (`--json`, `--output csv|tsv|
   ndjson`) keep their stable schemas and ignore the flag
+- *(cli)* New `nono dry-run-schema` subcommand prints the JSON
+  Schema (draft 2020-12) describing `--dry-run-json` output.
+  Useful for editor JSON-Schema mappings, CI policy linters, and
+  audit pipelines that validate the snapshot. Pinned to
+  `schema_version: 1`; new keys are additive within the version.
+  `-o <FILE>` writes to a file instead of stdout, mirroring
+  `nono profile schema`'s output convention
 
 ### Observability
 
