@@ -102,6 +102,19 @@ fn render_ps_header(
     Some(format!("{header_line}\n{divider}"))
 }
 
+/// Render the COMMAND column for a single ps row, honoring the
+/// `--no-truncate` opt-in. Centralized so the default and `--short`
+/// branches stay in lockstep — diverging behavior between the two
+/// renderers (e.g. `--no-truncate` working in `--short` but not in
+/// the default table) is the obvious latent bug.
+fn render_ps_command(command: &[String], no_truncate: bool, max_len: usize) -> String {
+    if no_truncate {
+        format_command_line(command)
+    } else {
+        truncate_command(command, max_len)
+    }
+}
+
 fn print_ps_table_once(args: &PsArgs) -> Result<()> {
     let sessions = session::list_sessions()?;
     // Translate `--since 1h` into an epoch threshold once so the filter
@@ -162,7 +175,7 @@ fn print_ps_table_once(args: &PsArgs) -> Result<()> {
             println!("{rendered}");
         }
         for session in &filtered {
-            println!("{}", format_ps_short_row(session, 60));
+            println!("{}", format_ps_short_row(session, 60, args.no_truncate));
         }
         return Ok(());
     }
@@ -208,7 +221,7 @@ fn print_ps_table_once(args: &PsArgs) -> Result<()> {
         let pid = session.child_pid;
         let uptime = format_uptime(&session.started);
         let profile = session.profile.as_deref().unwrap_or("-");
-        let command = truncate_command(&session.command, 40);
+        let command = render_ps_command(&session.command, args.no_truncate, 40);
 
         println!(
             "{:<16} {:<12} {} {} {:<8} {:<10} {:<14} {}",
@@ -455,7 +468,11 @@ fn format_ps_tabular(records: &[&SessionRecord], fmt: PsOutputFormat) -> String 
 /// pipes cleanly into `awk`/`cut`/`column`. Status text keeps the
 /// `exited(<code>)` suffix because the exit code is the single most
 /// useful piece of information for a finished session.
-fn format_ps_short_row(record: &SessionRecord, max_command_len: usize) -> String {
+fn format_ps_short_row(
+    record: &SessionRecord,
+    max_command_len: usize,
+    no_truncate: bool,
+) -> String {
     let name = record.name.as_deref().unwrap_or("-");
     let exit_code = record.exit_code.unwrap_or(-1);
     let status = match record.status {
@@ -463,7 +480,7 @@ fn format_ps_short_row(record: &SessionRecord, max_command_len: usize) -> String
         SessionStatus::Paused => "paused".to_string(),
         SessionStatus::Exited => format!("exited({exit_code})"),
     };
-    let command = truncate_command(&record.command, max_command_len);
+    let command = render_ps_command(&record.command, no_truncate, max_command_len);
     format!(
         "{:<16} {:<12} {:<12} {}",
         record.session_id, name, status, command
@@ -1103,6 +1120,7 @@ mod tests {
             watch: None,
             compact: false,
             header_format: PsHeaderFormat::Fancy,
+            no_truncate: false,
         }
     }
 
@@ -1525,7 +1543,7 @@ mod tests {
             None,
             vec!["echo".to_string(), "hi".to_string()],
         );
-        let row = format_ps_short_row(&rec, 60);
+        let row = format_ps_short_row(&rec, 60, false);
 
         assert!(
             !row.contains('\x1b'),
@@ -1546,7 +1564,7 @@ mod tests {
             Some(127),
             vec!["bash".to_string(), "-c".to_string(), "false".to_string()],
         );
-        let row = format_ps_short_row(&rec, 60);
+        let row = format_ps_short_row(&rec, 60, false);
 
         assert!(
             row.contains("exited(127)"),
@@ -1667,7 +1685,7 @@ mod tests {
     fn ps_short_row_truncates_command_to_max_len() {
         let long: String = "x".repeat(200);
         let rec = full_record_for_short_row("abc", None, SessionStatus::Running, None, vec![long]);
-        let row = format_ps_short_row(&rec, 32);
+        let row = format_ps_short_row(&rec, 32, false);
         // The truncate helper uses an ellipsis; the visible command must
         // never exceed the cap (give a small fudge for trailing chars).
         let cmd_section = row.split_whitespace().last().unwrap_or("");
@@ -1709,5 +1727,48 @@ mod tests {
             ..ps_args()
         };
         assert!(empty_filter_message(&with_filter).contains("filters"));
+    }
+
+    #[test]
+    fn render_ps_command_truncates_when_flag_off() {
+        // Default behavior: shave to max_len with a 3-char "..." suffix
+        // so wide commands don't blow up the column alignment.
+        let cmd: Vec<String> = vec!["a".repeat(80)];
+        let rendered = render_ps_command(&cmd, false, 40);
+        assert!(rendered.ends_with("..."));
+        assert!(rendered.chars().count() <= 40);
+    }
+
+    #[test]
+    fn render_ps_command_skips_truncate_with_flag() {
+        // The whole point of --no-truncate is letting users see the
+        // full argv. The result must NOT end in `...` even when the
+        // input is far longer than the would-be cap.
+        let long_arg = "a".repeat(200);
+        let cmd: Vec<String> = vec!["sh".to_string(), "-c".to_string(), long_arg.clone()];
+        let rendered = render_ps_command(&cmd, true, 40);
+        assert!(
+            !rendered.ends_with("..."),
+            "no_truncate must not end with the truncation ellipsis"
+        );
+        assert!(
+            rendered.contains(&long_arg),
+            "no_truncate must include the full long argument verbatim"
+        );
+    }
+
+    #[test]
+    fn ps_short_row_with_no_truncate_emits_full_command() {
+        // End-to-end via format_ps_short_row: the no_truncate boolean
+        // must reach the rendered row, not just the helper. Regression
+        // guard for the (easy) bug where a new flag is plumbed through
+        // PsArgs but only one of the two render branches gets updated.
+        let long: String = "x".repeat(200);
+        let rec = full_record_for_short_row("abc", None, SessionStatus::Running, None, vec![long]);
+        let row = format_ps_short_row(&rec, 32, true);
+        // Count xs anywhere in the row — must hit 200.
+        let xs = row.chars().filter(|c| *c == 'x').count();
+        assert_eq!(xs, 200, "full 200-char command should reach the row");
+        assert!(!row.contains("..."), "no truncation ellipsis: {row:?}");
     }
 }

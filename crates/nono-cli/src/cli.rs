@@ -2173,6 +2173,14 @@ pub struct PsArgs {
     /// Has no effect on `--json` or `--output csv|tsv|ndjson`.
     #[arg(long, value_enum, value_name = "STYLE", default_value_t = PsHeaderFormat::Fancy)]
     pub header_format: PsHeaderFormat,
+
+    /// Disable command-line truncation in the COMMAND column. Default
+    /// caps the rendered argv at 40 chars (60 in `--short`) so wide
+    /// terminals stay aligned; pass this when investigating a session
+    /// whose argv is hidden behind `…`. The CSV / TSV / NDJSON / JSON
+    /// outputs already emit the full command and ignore this flag.
+    #[arg(long)]
+    pub no_truncate: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -2871,6 +2879,24 @@ mod tests {
             with_output.is_err(),
             "--watch + --output must conflict — interactive mode vs batch render"
         );
+    }
+
+    #[test]
+    fn ps_no_truncate_parses_and_defaults_to_false() {
+        let bare = Cli::try_parse_from(["nono", "ps"]).expect("bare ps parses");
+        if let Commands::Ps(args) = bare.command {
+            assert!(!args.no_truncate, "default must be off (truncated)");
+        } else {
+            panic!("expected Ps");
+        }
+
+        let opted_in =
+            Cli::try_parse_from(["nono", "ps", "--no-truncate"]).expect("flag parses standalone");
+        if let Commands::Ps(args) = opted_in.command {
+            assert!(args.no_truncate);
+        } else {
+            panic!("expected Ps");
+        }
     }
 
     #[test]
