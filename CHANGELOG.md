@@ -348,6 +348,16 @@
   or `groups:` while you're still in the editor. Each tick
   re-reads from disk via `load_profile_no_migrate`. Same
   conflict shape as the inspect / ps watch flavors
+- *(profile)* `diff --watch <DURATION>` and
+  `--max-iterations <N>` close the watch set across both
+  profile-rendering paths. Use case: edit one of two profiles
+  in `$EDITOR` while a second terminal runs `nono profile
+  diff golden.json my-edit.json --watch 2s` — the diff
+  refreshes the moment the edit lands, giving live drift
+  feedback. Each tick re-reads both profiles via
+  `load_profile_no_migrate`. Conflicts with the structured-
+  output / single-shot modes (`--json` / `--compact` /
+  `--field` / `--quiet`)
 
 ### Observability
 
