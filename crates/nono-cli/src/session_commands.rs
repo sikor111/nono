@@ -272,6 +272,15 @@ fn print_ps_table_once(args: &PsArgs) -> Result<()> {
         filtered.reverse();
     }
 
+    if args.quiet {
+        // Grep-like exit code: 0 = at least one session matches,
+        // 1 = none. Sort/reverse are still applied above so that
+        // future non-quiet uses of the same args don't surprise
+        // anyone (cheaper than gating on quiet, and consistent
+        // with "the filter ran, we just didn't print").
+        std::process::exit(if filtered.is_empty() { 1 } else { 0 });
+    }
+
     if args.json {
         if let Some(ref field) = args.field {
             // `--field` short-circuits the full-document render. The
@@ -1326,6 +1335,7 @@ mod tests {
             columns: Vec::new(),
             field: None,
             max_iterations: None,
+            quiet: false,
         }
     }
 

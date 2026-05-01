@@ -2354,6 +2354,20 @@ pub struct PsArgs {
     /// Requires `--json`; has no effect on `--output csv|tsv|ndjson`.
     #[arg(long, value_name = "PATH", requires = "json")]
     pub field: Option<String>,
+
+    /// Suppress all stdout and signal "any sessions match?" via exit
+    /// code (grep-like): 0 = at least one session matches the
+    /// resolved filters, 1 = none. Lets CI / shell scripts branch
+    /// without parsing tabular output: `if nono ps --status running
+    /// --quiet; then echo "have running sessions"; fi`. Conflicts
+    /// with output-emitting flags (`--json` / `--compact` /
+    /// `--output` / `--field`) and with `--watch` (which is an
+    /// interactive loop, not a single check).
+    #[arg(
+        long,
+        conflicts_with_all = &["json", "compact", "output", "field", "watch"],
+    )]
+    pub quiet: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -3491,6 +3505,35 @@ mod tests {
             "/tmp/foo.json",
         ]);
         assert!(with_both.is_err(), "--field + --output must conflict");
+    }
+
+    #[test]
+    fn ps_quiet_parses_and_conflicts_with_output_modes() {
+        // Standalone parse: bare ps + --quiet → just sets the
+        // flag, no output flags interfere.
+        let bare = Cli::try_parse_from(["nono", "ps", "--quiet"]).expect("--quiet alone parses");
+        if let Commands::Ps(args) = bare.command {
+            assert!(args.quiet);
+        } else {
+            panic!("expected Ps");
+        }
+
+        // All output-emitting flags + --watch are mutually
+        // exclusive with --quiet (rejecting at parse time is
+        // clearer than letting one mode silently win).
+        for invocation in [
+            vec!["nono", "ps", "--quiet", "--json"],
+            vec!["nono", "ps", "--quiet", "--json", "--compact"],
+            vec!["nono", "ps", "--quiet", "--output", "csv"],
+            vec!["nono", "ps", "--quiet", "--json", "--field", "/0/name"],
+            vec!["nono", "ps", "--quiet", "--watch", "1s"],
+        ] {
+            assert!(
+                Cli::try_parse_from(&invocation).is_err(),
+                "{:?}: --quiet + output flag must be rejected",
+                invocation
+            );
+        }
     }
 
     #[test]
