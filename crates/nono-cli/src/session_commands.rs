@@ -33,6 +33,24 @@ fn reject_if_sandboxed(command: &str) -> Result<()> {
 
 /// Dispatch `nono ps`.
 pub fn run_ps(args: &PsArgs) -> Result<()> {
+    if let Some(spec) = args.watch.as_deref() {
+        let interval = parse_duration_to_secs(spec)?;
+        let dur = std::time::Duration::from_secs(interval);
+        loop {
+            // ANSI clear-screen + home-cursor. Users wired up to a
+            // non-ANSI terminal would see escape codes, but `--watch`
+            // is opt-in interactive — they wouldn't ask for it from
+            // a dumb pipe.
+            print!("\x1b[2J\x1b[H");
+            std::io::Write::flush(&mut std::io::stdout()).ok();
+            print_ps_table_once(args)?;
+            std::thread::sleep(dur);
+        }
+    }
+    print_ps_table_once(args)
+}
+
+fn print_ps_table_once(args: &PsArgs) -> Result<()> {
     let sessions = session::list_sessions()?;
     // Translate `--since 1h` into an epoch threshold once so the filter
     // closure stays pure and testable.
@@ -992,6 +1010,7 @@ mod tests {
             reverse: false,
             short: false,
             output: None,
+            watch: None,
         }
     }
 

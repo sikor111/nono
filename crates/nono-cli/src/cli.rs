@@ -2067,6 +2067,16 @@ pub struct PsArgs {
     /// Conflicts with `--json` because both ask for a non-table view.
     #[arg(long, value_enum, value_name = "FMT", conflicts_with = "json")]
     pub output: Option<PsOutputFormat>,
+
+    /// Refresh the session table every DURATION (e.g. `2s`, `5s`, `1m`)
+    /// — top-like polling mode. Conflicts with `--json` and `--output`
+    /// because both intend a single batch render. Exit with Ctrl-C.
+    #[arg(
+        long,
+        value_name = "DURATION",
+        conflicts_with_all = &["json", "output"],
+    )]
+    pub watch: Option<String>,
 }
 
 #[derive(Parser, Debug)]
@@ -2545,6 +2555,26 @@ mod tests {
         } else {
             panic!("expected Inspect command");
         }
+    }
+
+    #[test]
+    fn ps_watch_is_mutually_exclusive_with_batch_outputs() {
+        // --watch is interactive (top-like polling). Combining it with
+        // --json or --output would mean rendering a non-interactive
+        // payload over and over, which is pointless and confusing.
+        let alone = Cli::try_parse_from(["nono", "ps", "--watch", "5s"]).expect("--watch alone");
+        if let Commands::Ps(args) = alone.command {
+            assert_eq!(args.watch.as_deref(), Some("5s"));
+        } else {
+            panic!("expected Ps");
+        }
+        let with_json = Cli::try_parse_from(["nono", "ps", "--watch", "5s", "--json"]);
+        assert!(with_json.is_err(), "--watch + --json must conflict");
+        let with_output = Cli::try_parse_from(["nono", "ps", "--watch", "5s", "--output", "csv"]);
+        assert!(
+            with_output.is_err(),
+            "--watch + --output must conflict — interactive mode vs batch render"
+        );
     }
 
     #[test]
