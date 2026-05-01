@@ -283,13 +283,31 @@ fn tsv_escape(value: &str) -> String {
     out
 }
 
-/// Render the session list as CSV or TSV. Always emits a header row even
-/// when the input is empty so consumers can detect the column shape.
+/// Render the session list as CSV, TSV, or NDJSON. CSV/TSV emit a
+/// header row even for empty input so consumers can detect the column
+/// shape. NDJSON has no header row by design — one JSON object per line.
 ///
-/// Columns mirror the human-readable table minus colors / per-row
-/// padding: session_id, name, status, exit_code, attach, pid, uptime,
-/// started, profile, network, command.
+/// CSV/TSV columns mirror the human-readable table minus colors /
+/// per-row padding: session_id, name, status, exit_code, attach, pid,
+/// uptime, started, profile, network, command. NDJSON serializes the
+/// full SessionRecord (same shape as `--json`) so it's a strict
+/// superset of the CSV columns.
 fn format_ps_tabular(records: &[&SessionRecord], fmt: PsOutputFormat) -> String {
+    if matches!(fmt, PsOutputFormat::Ndjson) {
+        let mut out = String::new();
+        for record in records {
+            // serde_json::to_string emits compact JSON (no whitespace) —
+            // perfect for line-delimited consumers. Failure is treated
+            // as a skipped row rather than aborting the whole render
+            // because each record is independent.
+            if let Ok(line) = serde_json::to_string(record) {
+                out.push_str(&line);
+                out.push('\n');
+            }
+        }
+        return out;
+    }
+
     let header = [
         "session_id",
         "name",
@@ -306,6 +324,7 @@ fn format_ps_tabular(records: &[&SessionRecord], fmt: PsOutputFormat) -> String 
     let (sep, escape): (&str, fn(&str) -> String) = match fmt {
         PsOutputFormat::Csv => (",", csv_escape),
         PsOutputFormat::Tsv => ("\t", tsv_escape),
+        PsOutputFormat::Ndjson => unreachable!("ndjson handled above"),
     };
 
     let mut out = String::new();
@@ -1415,6 +1434,33 @@ mod tests {
             row.contains("\"bash -c 'echo a, b'\"")
                 || row.contains("\"bash -c \"\"echo a, b\"\"\""),
             "command with comma must be CSV-quoted: {row}"
+        );
+    }
+
+    #[test]
+    fn format_ps_tabular_ndjson_one_record_per_line_no_header() {
+        let rec_a = make_record("a", Some("first"), None, SessionStatus::Running);
+        let rec_b = make_record("b", None, Some("default"), SessionStatus::Exited);
+        let out = format_ps_tabular(&[&rec_a, &rec_b], PsOutputFormat::Ndjson);
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 2, "exactly one line per record, no header");
+        for line in &lines {
+            // Each line must round-trip as JSON — that's the whole
+            // contract of NDJSON.
+            let value: serde_json::Value =
+                serde_json::from_str(line).expect("each line must be valid JSON");
+            assert!(value.is_object(), "line must be a JSON object: {line}");
+        }
+    }
+
+    #[test]
+    fn format_ps_tabular_ndjson_empty_input_produces_no_lines() {
+        // NDJSON has no header concept, so empty input ⇒ empty output.
+        // Distinguishes it from CSV/TSV which emit a header anyway.
+        let out = format_ps_tabular(&[], PsOutputFormat::Ndjson);
+        assert!(
+            out.is_empty(),
+            "empty NDJSON must be the empty string, got {out:?}"
         );
     }
 

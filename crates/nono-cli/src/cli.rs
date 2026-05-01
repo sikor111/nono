@@ -1994,16 +1994,19 @@ pub enum PsSortBy {
 
 /// Tabular output format for `nono ps --output`.
 ///
-/// Csv and Tsv emit a header row followed by one record per line, with
-/// proper escaping of separator/quote characters in command arguments.
-/// Csv mode uses RFC 4180 quoting; Tsv mode encodes newlines, tabs, and
-/// carriage returns using backslash escapes so each record stays on a
-/// single line.
+/// `Csv` and `Tsv` emit a header row followed by one record per line,
+/// with proper escaping of separator/quote characters in command
+/// arguments. `Csv` uses RFC 4180 quoting; `Tsv` encodes newlines, tabs,
+/// and carriage returns using backslash escapes so each record stays on
+/// a single line. `Ndjson` emits one compact JSON object per line —
+/// the line-oriented counterpart to `--json`'s pretty array, suitable
+/// for streaming through `jq -c` / fluentd / log aggregators.
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 #[clap(rename_all = "lowercase")]
 pub enum PsOutputFormat {
     Csv,
     Tsv,
+    Ndjson,
 }
 
 #[derive(Parser, Debug)]
