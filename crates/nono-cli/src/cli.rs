@@ -1002,7 +1002,7 @@ pub struct ProfileDiffArgs {
     pub max_iterations: Option<u64>,
 }
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 pub struct ProfileValidateArgs {
     /// Profile JSON file to validate
     pub file: PathBuf,
@@ -1029,6 +1029,31 @@ pub struct ProfileValidateArgs {
     /// `--compact` / `--field`).
     #[arg(long, conflicts_with_all = &["json", "compact", "field"])]
     pub quiet: bool,
+
+    /// Re-run validation every DURATION (e.g. `2s`, `5s`, `1m`)
+    /// — top-like polling. Use case: edit a profile in `$EDITOR`
+    /// while a second terminal runs `nono profile validate
+    /// my.json --watch 1s` — the `valid` / `invalid` verdict and
+    /// per-rule `[ok]` / `[warn]` / `[err]` lines flip the moment
+    /// you save, giving instant feedback without rerunning the
+    /// command. Validation failures do NOT terminate the loop —
+    /// errors stay on screen until you fix them. Same clear-
+    /// screen + banner convention as the rest of the watch
+    /// surfaces. Conflicts with structured-output / quiet modes
+    /// (`--json` / `--compact` / `--field` / `--quiet`) since
+    /// those expect a single-shot render.
+    #[arg(
+        long,
+        value_name = "DURATION",
+        conflicts_with_all = &["json", "compact", "field", "quiet"],
+    )]
+    pub watch: Option<String>,
+
+    /// Cap `--watch` at N frames before exiting. Symmetric to
+    /// `nono profile show --max-iterations`. Requires `--watch`;
+    /// has no effect on a single-shot validation.
+    #[arg(long, value_name = "N", requires = "watch")]
+    pub max_iterations: Option<u64>,
 }
 
 #[derive(Parser, Debug)]
@@ -4187,6 +4212,117 @@ mod tests {
             assert!(
                 Cli::try_parse_from(&invocation).is_err(),
                 "{invocation:?}: --search + display-mode flag must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn profile_validate_watch_parses_and_conflicts_with_single_shot_modes() {
+        // --watch refreshes the validation verdict on a fixed
+        // cadence; structured-output / quiet flags expect a
+        // single-shot render so combining them must be rejected.
+        // Same conflict shape as the five other --watch surfaces.
+        let bare = Cli::try_parse_from([
+            "nono",
+            "profile",
+            "validate",
+            "/tmp/foo.json",
+            "--watch",
+            "2s",
+        ])
+        .expect("--watch alone parses");
+        if let Commands::Profile(args) = bare.command {
+            if let crate::cli::ProfileCommands::Validate(v) = args.command {
+                assert_eq!(v.watch.as_deref(), Some("2s"));
+                assert!(v.max_iterations.is_none());
+            } else {
+                panic!("expected Profile::Validate");
+            }
+        } else {
+            panic!("expected Profile");
+        }
+
+        let capped = Cli::try_parse_from([
+            "nono",
+            "profile",
+            "validate",
+            "/tmp/foo.json",
+            "--watch",
+            "1s",
+            "--max-iterations",
+            "5",
+        ])
+        .expect("--watch + --max-iterations parses");
+        if let Commands::Profile(args) = capped.command {
+            if let crate::cli::ProfileCommands::Validate(v) = args.command {
+                assert_eq!(v.watch.as_deref(), Some("1s"));
+                assert_eq!(v.max_iterations, Some(5));
+            } else {
+                panic!("expected Profile::Validate");
+            }
+        } else {
+            panic!("expected Profile");
+        }
+
+        // --max-iterations is meaningless without --watch; clap's
+        // `requires` keeps the surface honest.
+        assert!(
+            Cli::try_parse_from([
+                "nono",
+                "profile",
+                "validate",
+                "/tmp/foo.json",
+                "--max-iterations",
+                "5"
+            ])
+            .is_err(),
+            "--max-iterations without --watch must fail to parse"
+        );
+
+        for invocation in [
+            vec![
+                "nono",
+                "profile",
+                "validate",
+                "/tmp/foo.json",
+                "--watch",
+                "2s",
+                "--json",
+            ],
+            vec![
+                "nono",
+                "profile",
+                "validate",
+                "/tmp/foo.json",
+                "--watch",
+                "2s",
+                "--quiet",
+            ],
+            vec![
+                "nono",
+                "profile",
+                "validate",
+                "/tmp/foo.json",
+                "--watch",
+                "2s",
+                "--json",
+                "--compact",
+            ],
+            vec![
+                "nono",
+                "profile",
+                "validate",
+                "/tmp/foo.json",
+                "--watch",
+                "2s",
+                "--json",
+                "--field",
+                "valid",
+            ],
+        ] {
+            assert!(
+                Cli::try_parse_from(&invocation).is_err(),
+                "{invocation:?}: --watch + structured/quiet flag must be rejected"
             );
         }
     }

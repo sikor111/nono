@@ -2785,6 +2785,46 @@ fn resolve_validate_target(input: &std::path::Path) -> std::path::PathBuf {
 }
 
 pub(crate) fn cmd_validate(args: ProfileValidateArgs) -> Result<()> {
+    if let Some(spec) = args.watch.as_deref() {
+        let interval = crate::session_commands::parse_duration_to_secs(spec)?;
+        let dur = std::time::Duration::from_secs(interval);
+        let mut iterations_remaining: Option<u64> = args.max_iterations;
+        loop {
+            // Clear screen + home cursor — same convention as
+            // `ps`, `inspect`, `profile show`, `profile diff`,
+            // `why`. Banner names the surface so it's obvious
+            // which watch loop the user is looking at.
+            print!("\x1b[2J\x1b[H");
+            let now = chrono::Local::now().format("%H:%M:%S");
+            println!("nono profile validate — refreshing every {spec}  [{now}]");
+            println!();
+            let mut once = args.clone();
+            once.watch = None;
+            once.max_iterations = None;
+            // Validation failures must NOT terminate the loop —
+            // the user is editing in another pane and wants to
+            // see `invalid` flip back to `valid` as soon as they
+            // fix it. `ProfileParse("validation failed")` is the
+            // documented soft-fail signal; any other error path
+            // (e.g. embedded policy fails to load) is propagated.
+            match cmd_validate_once(once) {
+                Ok(()) => {}
+                Err(NonoError::ProfileParse(msg)) if msg == "validation failed" => {}
+                Err(e) => return Err(e),
+            }
+            if let Some(ref mut remaining) = iterations_remaining {
+                *remaining = remaining.saturating_sub(1);
+                if *remaining == 0 {
+                    return Ok(());
+                }
+            }
+            std::thread::sleep(dur);
+        }
+    }
+    cmd_validate_once(args)
+}
+
+fn cmd_validate_once(args: ProfileValidateArgs) -> Result<()> {
     let pol = policy::load_embedded_policy()?;
     let mut errors: Vec<String> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
@@ -3689,6 +3729,8 @@ mod tests {
             compact: false,
             field: None,
             quiet: false,
+            watch: None,
+            max_iterations: None,
         };
         let result = cmd_validate(args);
         assert!(result.is_ok(), "valid profile should pass validation");
@@ -3713,6 +3755,8 @@ mod tests {
             compact: false,
             field: None,
             quiet: false,
+            watch: None,
+            max_iterations: None,
         };
         let result = cmd_validate(args);
         assert!(result.is_err(), "invalid group should fail validation");
@@ -3738,6 +3782,8 @@ mod tests {
             compact: false,
             field: None,
             quiet: false,
+            watch: None,
+            max_iterations: None,
         };
         let result = cmd_validate(args);
         assert!(
