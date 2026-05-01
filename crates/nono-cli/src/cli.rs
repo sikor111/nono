@@ -1756,6 +1756,20 @@ pub struct WhyArgs {
     #[arg(long, value_name = "PATH", help_heading = "OPTIONS", requires = "json")]
     pub field: Option<String>,
 
+    /// Suppress all stdout output and signal the verdict via exit
+    /// code: 0 = allowed, 2 = denied, 3 = not running inside a
+    /// sandbox (only reachable with `--self`). Useful for shell
+    /// branching: `if nono why --command rm --profile X --quiet;
+    /// then echo allowed; fi`. Conflicts with `--json` / `--compact`
+    /// / `--field` (those modes ask for output) and `--print-policy`
+    /// (the policy dump has no verdict).
+    #[arg(
+        long,
+        help_heading = "OPTIONS",
+        conflicts_with_all = &["json", "compact", "field", "print_policy"],
+    )]
+    pub quiet: bool,
+
     /// Query current sandbox state (use inside a sandboxed process)
     #[arg(long = "self", help_heading = "OPTIONS")]
     pub self_query: bool,
@@ -2973,6 +2987,42 @@ mod tests {
             }
         } else {
             panic!("expected Profile");
+        }
+    }
+
+    #[test]
+    fn why_quiet_parses_and_conflicts_with_output_modes() {
+        // --quiet is exit-code-only; combining with output-emitting
+        // flags would be contradictory.
+        let bare = Cli::try_parse_from(["nono", "why", "--path", "/tmp", "--quiet"])
+            .expect("--quiet alone parses");
+        if let Commands::Why(args) = bare.command {
+            assert!(args.quiet);
+        } else {
+            panic!("expected Why");
+        }
+
+        for invocation in [
+            vec!["nono", "why", "--path", "/tmp", "--quiet", "--json"],
+            vec![
+                "nono",
+                "why",
+                "--path",
+                "/tmp",
+                "--quiet",
+                "--json",
+                "--compact",
+            ],
+            vec![
+                "nono", "why", "--path", "/tmp", "--quiet", "--json", "--field", "reason",
+            ],
+            vec!["nono", "why", "--quiet", "--print-policy"],
+        ] {
+            assert!(
+                Cli::try_parse_from(&invocation).is_err(),
+                "{:?}: --quiet + output flag must be rejected",
+                invocation
+            );
         }
     }
 

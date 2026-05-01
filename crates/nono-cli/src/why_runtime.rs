@@ -17,6 +17,12 @@ pub(crate) fn run_why(args: WhyArgs) -> Result<()> {
                 let result = QueryResult::NotSandboxed {
                     message: "Not running inside a nono sandbox".to_string(),
                 };
+                if args.quiet {
+                    // Exit code 3 == not sandboxed. Distinct from
+                    // 2 (denied) and 0 (allowed) so shell scripts
+                    // can branch three ways.
+                    std::process::exit(3);
+                }
                 if args.json {
                     if let Some(ref field) = args.field {
                         // `--self --field message` lets shell scripts
@@ -225,6 +231,19 @@ pub(crate) fn run_why(args: WhyArgs) -> Result<()> {
             "--path, --host, --net, --tcp, --tcp-bind or --command is required".to_string(),
         ));
     };
+
+    if args.quiet {
+        // Map verdict to exit code: 0 = allowed, 2 = denied,
+        // 3 = not sandboxed (the latter is unreachable here
+        // because the only path that produces NotSandboxed is
+        // the --self branch, which exits earlier — but matched
+        // exhaustively for safety).
+        match &result {
+            QueryResult::Allowed { .. } => std::process::exit(0),
+            QueryResult::Denied { .. } => std::process::exit(2),
+            QueryResult::NotSandboxed { .. } => std::process::exit(3),
+        }
+    }
 
     if args.json {
         // When `--explain` is set alongside `--json`, wrap the document
