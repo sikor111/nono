@@ -914,6 +914,13 @@ pub struct ProfileDiffArgs {
     /// Requires `--json`.
     #[arg(long, value_name = "PATH", requires = "json")]
     pub field: Option<String>,
+    /// Suppress all stdout and signal "are these profiles different?"
+    /// via exit code: 0 = identical, 1 = differ. Useful for CI
+    /// gates: `if ! nono profile diff a b --quiet; then echo
+    /// "drift detected"; fi`. Conflicts with output-emitting flags
+    /// (`--json` / `--compact` / `--field`).
+    #[arg(long, conflicts_with_all = &["json", "compact", "field"])]
+    pub quiet: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -3157,6 +3164,44 @@ mod tests {
             }
         } else {
             panic!("expected Profile");
+        }
+    }
+
+    #[test]
+    fn profile_diff_quiet_parses_and_conflicts_with_output_modes() {
+        let bare =
+            Cli::try_parse_from(["nono", "profile", "diff", "a", "b", "--quiet"]).expect("parses");
+        if let Commands::Profile(args) = bare.command {
+            if let crate::cli::ProfileCommands::Diff(d) = args.command {
+                assert!(d.quiet);
+            } else {
+                panic!("expected Profile::Diff");
+            }
+        } else {
+            panic!("expected Profile");
+        }
+
+        for invocation in [
+            vec!["nono", "profile", "diff", "a", "b", "--quiet", "--json"],
+            vec![
+                "nono",
+                "profile",
+                "diff",
+                "a",
+                "b",
+                "--quiet",
+                "--json",
+                "--compact",
+            ],
+            vec![
+                "nono", "profile", "diff", "a", "b", "--quiet", "--json", "--field", "groups",
+            ],
+        ] {
+            assert!(
+                Cli::try_parse_from(&invocation).is_err(),
+                "{:?}: --quiet + output flag must be rejected",
+                invocation
+            );
         }
     }
 

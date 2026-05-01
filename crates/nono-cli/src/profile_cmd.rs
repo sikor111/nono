@@ -1398,6 +1398,22 @@ pub(crate) fn cmd_diff(args: ProfileDiffArgs) -> Result<()> {
     let p1 = profile::load_profile_no_migrate(&args.profile1)?;
     let p2 = profile::load_profile_no_migrate(&args.profile2)?;
 
+    if args.quiet {
+        // Compare via canonical JSON serialization. `Profile` only
+        // derives `Serialize`, not `PartialEq`, so a JSON-value
+        // round-trip is the cheapest "are these equal?" check
+        // available without a deeper refactor — and it captures
+        // exactly the surface that the human and JSON diffs
+        // already operate on, so semantics stay aligned.
+        let p1_json = serde_json::to_value(&p1).map_err(|e| {
+            NonoError::ProfileParse(format!("failed to serialize {}: {e}", args.profile1))
+        })?;
+        let p2_json = serde_json::to_value(&p2).map_err(|e| {
+            NonoError::ProfileParse(format!("failed to serialize {}: {e}", args.profile2))
+        })?;
+        std::process::exit(if p1_json == p2_json { 0 } else { 1 });
+    }
+
     if args.json {
         let val = diff_to_json(&args.profile1, &args.profile2, &p1, &p2);
         if let Some(ref field) = args.field {
