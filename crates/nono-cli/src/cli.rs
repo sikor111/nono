@@ -2037,6 +2037,13 @@ pub struct PsArgs {
     #[arg(long, value_name = "CODE")]
     pub exit_code: Option<i32>,
 
+    /// Show only sessions started within the given duration window
+    /// (e.g. `--since 30m`, `--since 1h`, `--since 7d`). Accepts
+    /// suffixes `s`/`m`/`h`/`d`/`w`. Combine with `--all` if you also
+    /// want recent exited sessions.
+    #[arg(long, value_name = "DURATION")]
+    pub since: Option<String>,
+
     /// Sort the table by started time, name, status, or profile.
     /// Default sort is `started` (newest first), matching prior behavior.
     #[arg(long, value_enum, value_name = "KEY")]

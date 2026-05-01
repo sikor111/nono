@@ -34,8 +34,23 @@ fn reject_if_sandboxed(command: &str) -> Result<()> {
 /// Dispatch `nono ps`.
 pub fn run_ps(args: &PsArgs) -> Result<()> {
     let sessions = session::list_sessions()?;
-    let mut filtered: Vec<&SessionRecord> =
-        sessions.iter().filter(|s| ps_matches(s, args)).collect();
+    // Translate `--since 1h` into an epoch threshold once so the filter
+    // closure stays pure and testable.
+    let since_threshold: Option<u64> = match args.since.as_deref() {
+        None => None,
+        Some(input) => {
+            let dur = parse_duration_to_secs(input)?;
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|e| NonoError::ConfigParse(format!("system time before UNIX epoch: {e}")))?
+                .as_secs();
+            Some(now.saturating_sub(dur))
+        }
+    };
+    let mut filtered: Vec<&SessionRecord> = sessions
+        .iter()
+        .filter(|s| ps_matches(s, args, since_threshold))
+        .collect();
 
     // Apply explicit --sort if provided; otherwise keep list_sessions'
     // newest-first ordering. --reverse always flips whatever order ends
@@ -124,6 +139,65 @@ pub fn run_ps(args: &PsArgs) -> Result<()> {
     Ok(())
 }
 
+/// Parse a relative-duration shorthand into seconds.
+///
+/// Accepts `<N><unit>` where unit is one of:
+///   - `s` — seconds
+///   - `m` — minutes
+///   - `h` — hours
+///   - `d` — days
+///   - `w` — weeks (7 days)
+///
+/// Examples: `30s`, `15m`, `2h`, `7d`, `1w`. Compound forms (`1h30m`)
+/// and bare numbers (`30`) are rejected so the unit is unambiguous.
+pub(crate) fn parse_duration_to_secs(input: &str) -> Result<u64> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err(NonoError::ConfigParse(
+            "duration must not be empty".to_string(),
+        ));
+    }
+    let bytes = trimmed.as_bytes();
+    let last = *bytes
+        .last()
+        .ok_or_else(|| NonoError::ConfigParse("duration must not be empty".to_string()))?;
+    if !last.is_ascii_alphabetic() {
+        return Err(NonoError::ConfigParse(format!(
+            "duration `{trimmed}` is missing a unit suffix (s/m/h/d/w)"
+        )));
+    }
+    let multiplier: u64 = match last.to_ascii_lowercase() {
+        b's' => 1,
+        b'm' => 60,
+        b'h' => 60 * 60,
+        b'd' => 60 * 60 * 24,
+        b'w' => 60 * 60 * 24 * 7,
+        _ => {
+            return Err(NonoError::ConfigParse(format!(
+                "duration `{trimmed}` has unknown unit `{}` (expected s/m/h/d/w)",
+                last as char,
+            )))
+        }
+    };
+    let number_part = &trimmed[..trimmed.len() - 1];
+    if number_part.is_empty() {
+        return Err(NonoError::ConfigParse(format!(
+            "duration `{trimmed}` is missing a numeric prefix",
+        )));
+    }
+    let n: u64 = number_part.parse().map_err(|_| {
+        NonoError::ConfigParse(format!("duration `{trimmed}` has non-numeric prefix"))
+    })?;
+    if n == 0 {
+        return Err(NonoError::ConfigParse(
+            "duration must be greater than zero".to_string(),
+        ));
+    }
+    n.checked_mul(multiplier).ok_or_else(|| {
+        NonoError::ConfigParse(format!("duration `{trimmed}` overflows u64 seconds"))
+    })
+}
+
 /// Decide whether a session passes the active `nono ps` filters.
 ///
 /// Filters compose as AND: a session must satisfy every flag the user
@@ -134,7 +208,7 @@ pub fn run_ps(args: &PsArgs) -> Result<()> {
 /// 3. Otherwise the legacy default applies — exited sessions are hidden.
 ///
 /// On top of that, `--name` and `--profile` apply if set.
-fn ps_matches(s: &SessionRecord, args: &PsArgs) -> bool {
+fn ps_matches(s: &SessionRecord, args: &PsArgs, since_threshold: Option<u64>) -> bool {
     // `--exit-code` only makes sense for exited sessions; if the user
     // asked for a specific code, force-narrow to Exited regardless of
     // --all / --status defaults so `nono ps --exit-code 0` doesn't have
@@ -168,6 +242,12 @@ fn ps_matches(s: &SessionRecord, args: &PsArgs) -> bool {
 
     if let Some(profile) = args.profile.as_deref() {
         if s.profile.as_deref() != Some(profile) {
+            return false;
+        }
+    }
+
+    if let Some(threshold) = since_threshold {
+        if s.started_epoch < threshold {
             return false;
         }
     }
@@ -354,6 +434,7 @@ fn empty_filter_message(args: &PsArgs) -> &'static str {
         || args.profile.is_some()
         || args.status.is_some()
         || args.exit_code.is_some()
+        || args.since.is_some()
     {
         "No sessions match the requested filters."
     } else if args.all {
@@ -876,6 +957,7 @@ mod tests {
             profile: None,
             status: None,
             exit_code: None,
+            since: None,
             sort: None,
             reverse: false,
             short: false,
@@ -888,8 +970,8 @@ mod tests {
         let running = make_record("a", None, None, SessionStatus::Running);
         let exited = make_record("b", None, None, SessionStatus::Exited);
         let args = ps_args();
-        assert!(ps_matches(&running, &args));
-        assert!(!ps_matches(&exited, &args));
+        assert!(ps_matches(&running, &args, None));
+        assert!(!ps_matches(&exited, &args, None));
     }
 
     #[test]
@@ -899,7 +981,7 @@ mod tests {
             all: true,
             ..ps_args()
         };
-        assert!(ps_matches(&exited, &args));
+        assert!(ps_matches(&exited, &args, None));
     }
 
     #[test]
@@ -913,9 +995,9 @@ mod tests {
             ..ps_args()
         };
         // No --all needed: --status exited should let exited sessions through.
-        assert!(ps_matches(&exited, &args));
-        assert!(!ps_matches(&running, &args));
-        assert!(!ps_matches(&paused, &args));
+        assert!(ps_matches(&exited, &args, None));
+        assert!(!ps_matches(&running, &args, None));
+        assert!(!ps_matches(&paused, &args, None));
     }
 
     #[test]
@@ -927,10 +1009,13 @@ mod tests {
             name: Some("CLAUDE".to_string()),
             ..ps_args()
         };
-        assert!(ps_matches(&claude, &args), "case-insensitive substring");
-        assert!(!ps_matches(&codex, &args));
         assert!(
-            !ps_matches(&unnamed, &args),
+            ps_matches(&claude, &args, None),
+            "case-insensitive substring"
+        );
+        assert!(!ps_matches(&codex, &args, None));
+        assert!(
+            !ps_matches(&unnamed, &args, None),
             "sessions without a name are filtered out, not matched"
         );
     }
@@ -949,12 +1034,12 @@ mod tests {
             profile: Some("claude-code".to_string()),
             ..ps_args()
         };
-        assert!(ps_matches(&claude, &args));
+        assert!(ps_matches(&claude, &args, None));
         assert!(
-            !ps_matches(&claude_stretch, &args),
+            !ps_matches(&claude_stretch, &args, None),
             "exact match — substring of another profile must NOT pass"
         );
-        assert!(!ps_matches(&no_profile, &args));
+        assert!(!ps_matches(&no_profile, &args, None));
     }
 
     fn exited_with_code(id: &str, code: i32) -> SessionRecord {
@@ -973,10 +1058,10 @@ mod tests {
             exit_code: Some(0),
             ..ps_args()
         };
-        assert!(ps_matches(&success, &args));
-        assert!(!ps_matches(&failed, &args));
+        assert!(ps_matches(&success, &args, None));
+        assert!(!ps_matches(&failed, &args, None));
         assert!(
-            !ps_matches(&still_running, &args),
+            !ps_matches(&still_running, &args, None),
             "running sessions have no exit code yet — must be excluded"
         );
     }
@@ -989,8 +1074,8 @@ mod tests {
             exit_code: Some(137),
             ..ps_args()
         };
-        assert!(ps_matches(&oom, &args));
-        assert!(!ps_matches(&other, &args));
+        assert!(ps_matches(&oom, &args, None));
+        assert!(!ps_matches(&other, &args, None));
     }
 
     #[test]
@@ -1004,7 +1089,7 @@ mod tests {
             ..ps_args()
         };
         assert!(
-            ps_matches(&success, &args),
+            ps_matches(&success, &args, None),
             "--exit-code must auto-include exited sessions even without --all"
         );
     }
@@ -1029,8 +1114,66 @@ mod tests {
             name: Some("review".to_string()),
             ..ps_args()
         };
-        assert!(ps_matches(&target, &args));
-        assert!(!ps_matches(&wrong_name, &args));
+        assert!(ps_matches(&target, &args, None));
+        assert!(!ps_matches(&wrong_name, &args, None));
+    }
+
+    #[test]
+    fn parse_duration_accepts_each_unit_suffix() {
+        assert_eq!(parse_duration_to_secs("30s").expect("30s"), 30);
+        assert_eq!(parse_duration_to_secs("5m").expect("5m"), 5 * 60);
+        assert_eq!(parse_duration_to_secs("2h").expect("2h"), 2 * 60 * 60);
+        assert_eq!(parse_duration_to_secs("7d").expect("7d"), 7 * 60 * 60 * 24);
+        assert_eq!(parse_duration_to_secs("1w").expect("1w"), 60 * 60 * 24 * 7);
+        // case-insensitive on the unit letter
+        assert_eq!(parse_duration_to_secs("2H").expect("2H"), 2 * 60 * 60);
+    }
+
+    #[test]
+    fn parse_duration_rejects_malformed_input() {
+        // Empty / whitespace-only
+        assert!(parse_duration_to_secs("").is_err());
+        assert!(parse_duration_to_secs("  ").is_err());
+        // Bare number — no unit
+        assert!(parse_duration_to_secs("30").is_err());
+        // Unknown unit
+        assert!(parse_duration_to_secs("5y").is_err());
+        // Missing numeric prefix
+        assert!(parse_duration_to_secs("h").is_err());
+        // Non-numeric prefix
+        assert!(parse_duration_to_secs("abch").is_err());
+        // Zero is rejected (would otherwise mean "all sessions")
+        assert!(parse_duration_to_secs("0s").is_err());
+        assert!(parse_duration_to_secs("0d").is_err());
+    }
+
+    #[test]
+    fn ps_filter_since_threshold_excludes_older_sessions() {
+        let recent = SessionRecord {
+            started_epoch: 200,
+            ..make_record("a", None, None, SessionStatus::Running)
+        };
+        let stale = SessionRecord {
+            started_epoch: 50,
+            ..make_record("b", None, None, SessionStatus::Running)
+        };
+        let args = ps_args();
+        // threshold 100 — only sessions started at or after 100 pass
+        assert!(ps_matches(&recent, &args, Some(100)));
+        assert!(
+            !ps_matches(&stale, &args, Some(100)),
+            "started_epoch < threshold must be excluded"
+        );
+    }
+
+    #[test]
+    fn ps_filter_since_with_no_threshold_is_a_passthrough() {
+        let stale = SessionRecord {
+            started_epoch: 0,
+            ..make_record("a", None, None, SessionStatus::Running)
+        };
+        // None threshold preserves all the other filter semantics
+        assert!(ps_matches(&stale, &ps_args(), None));
     }
 
     #[test]
@@ -1053,9 +1196,9 @@ mod tests {
             profile: Some("default".to_string()),
             ..ps_args()
         };
-        assert!(ps_matches(&target, &args));
-        assert!(!ps_matches(&wrong_profile, &args));
-        assert!(!ps_matches(&wrong_name, &args));
+        assert!(ps_matches(&target, &args, None));
+        assert!(!ps_matches(&wrong_profile, &args, None));
+        assert!(!ps_matches(&wrong_name, &args, None));
     }
 
     fn sort_session_ids(records: &[SessionRecord], key: PsSortBy) -> Vec<&str> {
