@@ -293,6 +293,14 @@
   --quiet; then nono inspect "$SID" --json | process; fi`.
   Conflicts with output-emitting flags (`--json` / `--compact`
   / `--field` / `--events`)
+- *(profile)* `list --names-only` emits just the profile
+  names, one per line, in the same order JSON mode uses
+  (built-in → packs → user). Friendlier than `--field /N/name`
+  for shell loops: `for p in $(nono profile list --names-only);
+  do …; done`. Profiles that fail to load still appear by name
+  (the failure identity is the name itself; the JSON / human
+  paths surface error details). Conflicts with `--json` /
+  `--compact` / `--field`
 
 ### Observability
 
