@@ -4,8 +4,8 @@
 //! `nono inspect`, and `nono prune`.
 
 use crate::cli::{
-    AttachArgs, DetachArgs, InspectArgs, LogsArgs, PruneArgs, PsArgs, PsOutputFormat, PsSortBy,
-    PsStatusFilter, StopArgs,
+    AttachArgs, DetachArgs, InspectArgs, LogsArgs, PruneArgs, PsArgs, PsHeaderFormat,
+    PsOutputFormat, PsSortBy, PsStatusFilter, StopArgs,
 };
 use crate::command_display::{format_command_line, truncate_command};
 use crate::session::{self, SessionAttachment, SessionRecord, SessionStatus};
@@ -71,6 +71,37 @@ fn format_watch_banner(now: chrono::DateTime<chrono::Local>, interval_secs: u64)
     )
 }
 
+/// Sum of column widths + interleaved single spaces for the default
+/// table layout (`{:<16} {:<12} {:<12} {:<12} {:<8} {:<10} {:<14}` plus
+/// a trailing `COMMAND` budget). Used as the divider width so the line
+/// reaches the start of the variable-length COMMAND column.
+const PS_DEFAULT_TABLE_WIDTH: usize =
+    16 + 1 + 12 + 1 + 12 + 1 + 12 + 1 + 8 + 1 + 10 + 1 + 14 + 1 + "COMMAND".len();
+
+/// Same idea for the `--short` layout: 3 padded columns + COMMAND.
+const PS_SHORT_TABLE_WIDTH: usize = 16 + 1 + 12 + 1 + 12 + 1 + "COMMAND".len();
+
+/// Render the table header — column titles followed by a divider —
+/// per the user's chosen `PsHeaderFormat`. Returns `None` for `None`
+/// so the caller can decide whether to print or skip both lines as a
+/// unit (skipping the header without the divider would leave a stray
+/// horizontal rule).
+fn render_ps_header(
+    fmt: PsHeaderFormat,
+    header_line: &str,
+    divider_width: usize,
+) -> Option<String> {
+    let divider_char = match fmt {
+        PsHeaderFormat::Fancy => '─',
+        PsHeaderFormat::Ascii => '-',
+        PsHeaderFormat::None => return None,
+    };
+    let divider: String = std::iter::repeat(divider_char)
+        .take(divider_width)
+        .collect();
+    Some(format!("{header_line}\n{divider}"))
+}
+
 fn print_ps_table_once(args: &PsArgs) -> Result<()> {
     let sessions = session::list_sessions()?;
     // Translate `--since 1h` into an epoch threshold once so the filter
@@ -125,18 +156,24 @@ fn print_ps_table_once(args: &PsArgs) -> Result<()> {
     }
 
     if args.short {
-        println!("{:<16} {:<12} {:<12} COMMAND", "SESSION", "NAME", "STATUS");
+        let header = format!("{:<16} {:<12} {:<12} COMMAND", "SESSION", "NAME", "STATUS");
+        if let Some(rendered) = render_ps_header(args.header_format, &header, PS_SHORT_TABLE_WIDTH)
+        {
+            println!("{rendered}");
+        }
         for session in &filtered {
             println!("{}", format_ps_short_row(session, 60));
         }
         return Ok(());
     }
 
-    // Table header
-    println!(
+    let header = format!(
         "{:<16} {:<12} {:<12} {:<12} {:<8} {:<10} {:<14} COMMAND",
         "SESSION", "NAME", "STATUS", "ATTACH", "PID", "UPTIME", "PROFILE"
     );
+    if let Some(rendered) = render_ps_header(args.header_format, &header, PS_DEFAULT_TABLE_WIDTH) {
+        println!("{rendered}");
+    }
 
     for session in &filtered {
         let name = session.name.as_deref().unwrap_or("-");
@@ -1065,6 +1102,7 @@ mod tests {
             output: None,
             watch: None,
             compact: false,
+            header_format: PsHeaderFormat::Fancy,
         }
     }
 
@@ -1251,6 +1289,50 @@ mod tests {
             .expect("valid local time");
         assert!(format_watch_banner(when, 60).contains("(every 60s)"));
         assert!(format_watch_banner(when, 3600).contains("(every 3600s)"));
+    }
+
+    #[test]
+    fn render_ps_header_fancy_emits_unicode_divider() {
+        let header = "SESSION   NAME   STATUS";
+        let rendered = render_ps_header(PsHeaderFormat::Fancy, header, 24)
+            .expect("fancy must render a header");
+        let mut lines = rendered.lines();
+        assert_eq!(lines.next(), Some("SESSION   NAME   STATUS"));
+        let divider = lines.next().expect("divider line follows header");
+        assert_eq!(divider.chars().count(), 24, "divider width matches request");
+        assert!(
+            divider.chars().all(|c| c == '─'),
+            "fancy divider must use the unicode box-drawing horizontal: {divider:?}"
+        );
+        assert_eq!(lines.next(), None, "exactly two lines: header + divider");
+    }
+
+    #[test]
+    fn render_ps_header_ascii_emits_dash_divider() {
+        let header = "SESSION   NAME   STATUS";
+        let rendered = render_ps_header(PsHeaderFormat::Ascii, header, 24)
+            .expect("ascii must render a header");
+        let mut lines = rendered.lines();
+        assert_eq!(lines.next(), Some("SESSION   NAME   STATUS"));
+        let divider = lines.next().expect("divider line follows header");
+        assert_eq!(divider, "-".repeat(24), "ASCII divider is plain dashes");
+        assert_eq!(lines.next(), None);
+    }
+
+    #[test]
+    fn render_ps_header_none_returns_none() {
+        // The "none" branch must skip BOTH the header line AND the
+        // divider — printing only the divider would leave a stray
+        // horizontal rule above the data rows.
+        assert!(render_ps_header(PsHeaderFormat::None, "SESSION", 16).is_none());
+    }
+
+    #[test]
+    fn render_ps_header_default_is_fancy() {
+        // Backwards-compat guarantee: existing `nono ps` invocations
+        // (no --header-format flag) get the unicode-divider rendering.
+        let default_fmt = PsHeaderFormat::default();
+        assert_eq!(default_fmt, PsHeaderFormat::Fancy);
     }
 
     #[test]

@@ -2069,6 +2069,27 @@ pub enum PsOutputFormat {
     Ndjson,
 }
 
+/// Header style for the human-readable `nono ps` table.
+///
+/// Only applies to the default and `--short` table renders — the
+/// machine-friendly `--output csv|tsv|ndjson` and `--json` paths follow
+/// their own conventions and ignore this knob.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[clap(rename_all = "lowercase")]
+pub enum PsHeaderFormat {
+    /// Print column titles with a unicode box-drawing divider beneath
+    /// (`─` repeated to the table width). Default for interactive use.
+    #[default]
+    Fancy,
+    /// Same column titles, but the divider falls back to ASCII dashes
+    /// (`-`). Pick this when piping through tools or terminals that
+    /// mangle non-ASCII characters.
+    Ascii,
+    /// Skip the header (and divider) entirely — emits only data rows,
+    /// so `awk`/`cut`/`column` consumers don't have to `tail -n +2`.
+    None,
+}
+
 #[derive(Parser, Debug)]
 pub struct PsArgs {
     /// Output as JSON
@@ -2144,6 +2165,14 @@ pub struct PsArgs {
     /// `--output ndjson` if you want one record per line.
     #[arg(long, requires = "json")]
     pub compact: bool,
+
+    /// Header style for the human-readable table (`fancy`, `ascii`,
+    /// `none`). Defaults to `fancy` (unicode divider). Use `ascii` for
+    /// legacy terminals / CI logs and `none` to drop the header
+    /// entirely so `awk`/`cut` consumers don't need a `tail -n +2`.
+    /// Has no effect on `--json` or `--output csv|tsv|ndjson`.
+    #[arg(long, value_enum, value_name = "STYLE", default_value_t = PsHeaderFormat::Fancy)]
+    pub header_format: PsHeaderFormat,
 }
 
 #[derive(Parser, Debug)]
@@ -2842,6 +2871,36 @@ mod tests {
             with_output.is_err(),
             "--watch + --output must conflict — interactive mode vs batch render"
         );
+    }
+
+    #[test]
+    fn ps_header_format_parses_each_value_and_defaults_to_fancy() {
+        // Default: no flag means Fancy, matching the prior behavior of
+        // emitting the column header (now plus a unicode divider).
+        let bare = Cli::try_parse_from(["nono", "ps"]).expect("bare ps parses");
+        if let Commands::Ps(args) = bare.command {
+            assert_eq!(args.header_format, PsHeaderFormat::Fancy);
+        } else {
+            panic!("expected Ps");
+        }
+
+        for (input, expected) in [
+            ("fancy", PsHeaderFormat::Fancy),
+            ("ascii", PsHeaderFormat::Ascii),
+            ("none", PsHeaderFormat::None),
+        ] {
+            let parsed = Cli::try_parse_from(["nono", "ps", "--header-format", input])
+                .unwrap_or_else(|e| panic!("parse {input:?}: {e}"));
+            if let Commands::Ps(args) = parsed.command {
+                assert_eq!(args.header_format, expected, "input was {input:?}");
+            } else {
+                panic!("expected Ps");
+            }
+        }
+
+        // Invalid value: clap's value_enum rejects at parse time, no
+        // chance for a typo to silently fall back to a default.
+        assert!(Cli::try_parse_from(["nono", "ps", "--header-format", "bogus"]).is_err());
     }
 
     #[test]
